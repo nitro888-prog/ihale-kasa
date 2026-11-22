@@ -1,4 +1,4 @@
-const LOGO_URL = '/ihale/assets/aistudio/g_ncel_TINIATECH__S_ML__817f9f87.png';
+const LOGO_URL = '/assets/aistudio/g_ncel_TINIATECH__S_ML__817f9f87.png';
 
 let cachedLogoDataUrlPromise: Promise<string | null> | null = null;
 

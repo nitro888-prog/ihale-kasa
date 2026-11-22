@@ -303,14 +303,14 @@ export const InvoicePdfImportModal: React.FC<InvoicePdfImportModalProps> = ({
       };
 
       let headers = await getAuthBearerHeaders();
-      let res = await fetch('/ihale/api/accounting/parse-invoice-pdf', {
+      let res = await fetch('/api/accounting/parse-invoice-pdf', {
         method: 'POST',
         headers: { Authorization: headers.Authorization },
         body: buildFormData(),
       });
       if (res.status === 401) {
         headers = await getAuthBearerHeaders(true);
-        res = await fetch('/ihale/api/accounting/parse-invoice-pdf', {
+        res = await fetch('/api/accounting/parse-invoice-pdf', {
           method: 'POST',
           headers: { Authorization: headers.Authorization },
           body: buildFormData(),

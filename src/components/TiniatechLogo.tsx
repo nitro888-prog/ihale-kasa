@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-export const TINIATECH_LOGO_SRC = '/ihale/assets/aistudio/g_ncel_TINIATECH__S_ML__817f9f87.png';
+export const TINIATECH_LOGO_SRC = '/assets/aistudio/g_ncel_TINIATECH__S_ML__817f9f87.png';
 
 export type TiniatechLogoVariant = 'sidebar' | 'plaque' | 'hero' | 'compact' | 'inline';
 

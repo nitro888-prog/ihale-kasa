@@ -87,10 +87,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
     setIpError(false);
     try {
       let headers = await getAuthBearerHeaders();
-      let res = await fetch('/ihale/api/session/client-ip', { headers });
+      let res = await fetch('/api/session/client-ip', { headers });
       if (res.status === 401) {
         headers = await getAuthBearerHeaders(true);
-        res = await fetch('/ihale/api/session/client-ip', { headers });
+        res = await fetch('/api/session/client-ip', { headers });
       }
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
@@ -114,10 +114,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
     (async () => {
       try {
         let headers = await getAuthBearerHeaders();
-        let res = await fetch('/ihale/api/session/client-ip', { headers });
+        let res = await fetch('/api/session/client-ip', { headers });
         if (res.status === 401) {
           headers = await getAuthBearerHeaders(true);
-          res = await fetch('/ihale/api/session/client-ip', { headers });
+          res = await fetch('/api/session/client-ip', { headers });
         }
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`);

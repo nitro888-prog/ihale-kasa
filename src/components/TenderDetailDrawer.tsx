@@ -373,8 +373,8 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
     try {
       const endpoint =
         mode === 'products'
-          ? '/ihale/api/tenders/analyze-products'
-          : '/ihale/api/tenders/analyze-document';
+          ? '/api/tenders/analyze-products'
+          : '/api/tenders/analyze-document';
 
       const buildRequestInit = (
         authHeaders: Record<string, string>
