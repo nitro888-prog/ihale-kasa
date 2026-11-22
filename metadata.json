@@ -1,0 +1,6 @@
+{
+  "name": "İhaleKasa",
+  "description": "İhalelere katılım sağlayan firmalar için takvimle senkronize ihale takip numarası, güvenli doküman kasası ve ihale günü hızlı erişim paneli.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

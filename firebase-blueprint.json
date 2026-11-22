@@ -1,0 +1,1071 @@
+{
+  "entities": {
+    "UserAuthorization": {
+      "title": "UserAuthorization",
+      "description": "Kullanıcı rol, durum ve modül bazlı yetkilendirme kaydı",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "department": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "ihale_sorumlusu", "onay_yetkilisi", "goruntuleyici"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "active", "suspended"]
+        },
+        "workspaceOwnerId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "inviteId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "permissions": {
+          "type": "object"
+        },
+        "approvedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "managerUids": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "displayName",
+        "department",
+        "role",
+        "status",
+        "workspaceOwnerId",
+        "inviteId",
+        "permissions",
+        "approvedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserInvite": {
+      "title": "UserInvite",
+      "description": "Yönetici tarafından e-posta bazlı ön yetkilendirme daveti",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "department": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "ihale_sorumlusu", "onay_yetkilisi", "goruntuleyici"]
+        },
+        "workspaceOwnerId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "permissions": {
+          "type": "object"
+        },
+        "invitedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending_claim", "claimed"]
+        },
+        "claimedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "email",
+        "displayName",
+        "department",
+        "role",
+        "workspaceOwnerId",
+        "permissions",
+        "invitedBy",
+        "status",
+        "claimedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminMarker": {
+      "title": "AdminMarker",
+      "description": "Sistem yöneticisi doğrulama kaydı",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "grantedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "grantedBy", "createdAt"]
+    },
+    "CompanyProfile": {
+      "title": "CompanyProfile",
+      "description": "Firmaya özel kurumsal ayarlar ve yetkili bilgileri",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "companyName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "taxOffice": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "taxNumber": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "authorizedPerson": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "defaultReminderDays": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "companyName",
+        "taxOffice",
+        "taxNumber",
+        "authorizedPerson",
+        "phone",
+        "email",
+        "defaultReminderDays",
+        "updatedAt"
+      ]
+    },
+    "Tender": {
+      "title": "Tender",
+      "description": "Takvimle senkronize takip numarasına sahip kurumsal ihale kaydı",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "trackingCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "ikn": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "authority": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "tenderDate": {
+          "type": "string",
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "tenderTime": {
+          "type": "string",
+          "maxLength": 5,
+          "pattern": "^[0-9]{2}:[0-9]{2}$"
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "procurementType": {
+          "type": "string",
+          "enum": ["acik_ihale", "belli_istekliler", "pazarlik", "dogrudan_temin"]
+        },
+        "estimatedAmount": {
+          "type": "number"
+        },
+        "bidBondAmount": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["TRY", "USD", "EUR"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["hazirlik", "onay_bekliyor", "teslim_edildi", "kazanildi", "sonuclandi", "iptal"]
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "checklist": {
+          "type": "object"
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdByEmail": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "createdByName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "trackingCode",
+        "ikn",
+        "title",
+        "authority",
+        "tenderDate",
+        "tenderTime",
+        "location",
+        "procurementType",
+        "estimatedAmount",
+        "bidBondAmount",
+        "currency",
+        "status",
+        "notes",
+        "checklist",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TenderDocument": {
+      "title": "TenderDocument",
+      "description": "İhaleye özel şifreli/güvenli doküman üst verisi",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tenderId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "idari_sartname",
+            "teknik_sartname",
+            "teklif_mektubu",
+            "gecici_teminat",
+            "birim_fiyat",
+            "yetki_belgesi",
+            "zeyilname",
+            "diger"
+          ]
+        },
+        "mimeType": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "sizeBytes": {
+          "type": "number"
+        },
+        "chunkCount": {
+          "type": "number"
+        },
+        "sha256": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdByEmail": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "createdByName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "tenderId",
+        "name",
+        "category",
+        "mimeType",
+        "sizeBytes",
+        "chunkCount",
+        "sha256",
+        "verified",
+        "notes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DocumentChunk": {
+      "title": "DocumentChunk",
+      "description": "Güvenli doküman veri parçası",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "docId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "index": {
+          "type": "number"
+        },
+        "data": {
+          "type": "string",
+          "maxLength": 500000
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdByEmail": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "createdByName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "docId", "index", "data", "createdAt"]
+    },
+    "CompanyVaultDocument": {
+      "title": "CompanyVaultDocument",
+      "description": "Tüm ihalelerde ortak kullanılan firma sabit evrak kaydı",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "imza_sirkuleri",
+            "vergi_levhasi",
+            "ticaret_sicil",
+            "oda_kayit",
+            "borcu_yoktur",
+            "is_bitirme",
+            "teminat_mektubu",
+            "diger"
+          ]
+        },
+        "mimeType": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "sizeBytes": {
+          "type": "number"
+        },
+        "chunkCount": {
+          "type": "number"
+        },
+        "sha256": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "expiryDate": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdByEmail": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "createdByName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "name",
+        "category",
+        "mimeType",
+        "sizeBytes",
+        "chunkCount",
+        "sha256",
+        "expiryDate",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "BidProduct": {
+      "title": "BidProduct",
+      "description": "Teklif verilen ürün kartı (stok no, parça no, malzeme, tedarikçi firma, fiyat ve tarih bilgileri)",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tenderId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "tenderTrackingCode": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "stockNumber": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "partNumber": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "materialName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "supplierCompany": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "priceDate": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "offeredSalePrice": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["TRY", "USD", "EUR"]
+        },
+        "purchaseDate": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "quotedDate": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdByEmail": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "createdByName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "tenderId",
+        "tenderTrackingCode",
+        "stockNumber",
+        "partNumber",
+        "materialName",
+        "supplierCompany",
+        "priceDate",
+        "offeredSalePrice",
+        "currency",
+        "purchaseDate",
+        "quotedDate",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "RecycleBinItem": {
+      "title": "RecycleBinItem",
+      "description": "Silinen kayıtların geri dönüşüm kutusu arşivi ve silen kullanıcı kimliği",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "entityType": {
+          "type": "string",
+          "enum": ["tender", "tender_document", "company_vault", "bid_product", "accounting_company", "accounting_entry", "accounting_cheque", "project", "project_transaction", "sales_quote"]
+        },
+        "originalId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "parentTenderId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "parentTenderCode": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdByEmail": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "createdByName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "deletedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "deletedByEmail": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "deletedByName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "deletedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "payload": {
+          "type": "object"
+        },
+        "chunkCount": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "ownerId",
+        "entityType",
+        "originalId",
+        "parentTenderId",
+        "parentTenderCode",
+        "title",
+        "subtitle",
+        "createdBy",
+        "createdByEmail",
+        "createdByName",
+        "deletedBy",
+        "deletedByEmail",
+        "deletedByName",
+        "deletedAt",
+        "payload",
+        "chunkCount"
+      ]
+    },
+    "AccountingCompany": {
+      "title": "AccountingCompany",
+      "description": "Ön muhasebe cari firma kartı (tedarikçi ve müşteri hesapları)",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "companyType": { "type": "string", "enum": ["tedarikci", "musteri", "her_ikisi"] },
+        "taxOffice": { "type": "string", "maxLength": 80 },
+        "taxNumber": { "type": "string", "maxLength": 20 },
+        "contactPerson": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "email": { "type": "string", "maxLength": 120 },
+        "address": { "type": "string", "maxLength": 240 },
+        "iban": { "type": "string", "maxLength": 40 },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 120 },
+        "createdByName": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId", "name", "companyType", "taxOffice", "taxNumber",
+        "contactPerson", "phone", "email", "address", "iban", "notes",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "AccountingEntry": {
+      "title": "AccountingEntry",
+      "description": "Ön muhasebe fatura, tahsilat, ödeme ve gider kaydı",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "entryType": { "type": "string", "enum": ["alis_faturasi", "satis_faturasi", "tahsilat", "odeme", "gider"] },
+        "companyId": { "type": "string", "maxLength": 128 },
+        "companyName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "invoiceNo": { "type": "string", "maxLength": 60 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "stockNumber": { "type": "string", "maxLength": 60 },
+        "partNumber": { "type": "string", "maxLength": 60 },
+        "quantity": { "type": "number" },
+        "unit": { "type": "string", "maxLength": 30 },
+        "unitPrice": { "type": "number" },
+        "vatRate": { "type": "number" },
+        "subtotalAmount": { "type": "number" },
+        "vatAmount": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["TRY", "USD", "EUR"] },
+        "entryDate": { "type": "string", "maxLength": 10 },
+        "dueDate": { "type": "string", "maxLength": 10 },
+        "paymentMethod": { "type": "string", "enum": ["nakit", "banka_havale", "kredi_karti", "cek_senet", "vadeli"] },
+        "paymentStatus": { "type": "string", "enum": ["bekliyor", "odendi", "kismi", "iptal"] },
+        "tenderId": { "type": "string", "maxLength": 128 },
+        "tenderTrackingCode": { "type": "string", "maxLength": 32 },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 120 },
+        "createdByName": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId", "entryType", "companyId", "companyName", "invoiceNo", "title",
+        "stockNumber", "partNumber", "quantity", "unit", "unitPrice", "vatRate",
+        "subtotalAmount", "vatAmount", "totalAmount", "paidAmount", "currency",
+        "entryDate", "dueDate", "paymentMethod", "paymentStatus",
+        "tenderId", "tenderTrackingCode", "notes", "createdAt", "updatedAt"
+      ]
+    },
+    "AccountingCheque": {
+      "title": "AccountingCheque",
+      "description": "Ön muhasebe alınan ve verilen çek takip kaydı",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "direction": { "type": "string", "enum": ["alinan", "verilen"] },
+        "chequeNo": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "bankName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "branchName": { "type": "string", "maxLength": 100 },
+        "drawerName": { "type": "string", "maxLength": 160 },
+        "companyId": { "type": "string", "maxLength": 128 },
+        "companyName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "endorsedTo": { "type": "string", "maxLength": 160 },
+        "issueDate": { "type": "string", "maxLength": 10 },
+        "dueDate": { "type": "string", "maxLength": 10, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["TRY", "USD", "EUR"] },
+        "status": {
+          "type": "string",
+          "enum": ["portfoyde", "tahsile_verildi", "ciro_edildi", "tahsil_edildi", "odendi", "karsiliksiz", "iade"]
+        },
+        "tenderId": { "type": "string", "maxLength": 128 },
+        "tenderTrackingCode": { "type": "string", "maxLength": 32 },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 120 },
+        "createdByName": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId", "direction", "chequeNo", "bankName", "branchName", "drawerName",
+        "companyId", "companyName", "endorsedTo", "issueDate", "dueDate", "amount",
+        "currency", "status", "tenderId", "tenderTrackingCode", "notes", "createdAt", "updatedAt"
+      ]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Kazanılan ihalelere bağlı proje yönetimi kaydı ve yetkili proje yöneticisi ataması",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "projectCode": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "tenderId": { "type": "string", "maxLength": 128 },
+        "tenderTrackingCode": { "type": "string", "maxLength": 32 },
+        "quoteId": { "type": "string", "maxLength": 128 },
+        "quoteNumber": { "type": "string", "maxLength": 40 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "authority": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "contractAmount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["TRY", "USD", "EUR"] },
+        "startDate": { "type": "string", "maxLength": 10, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "endDate": { "type": "string", "maxLength": 10 },
+        "status": { "type": "string", "enum": ["planlama", "aktif", "askida", "tamamlandi", "iptal"] },
+        "managerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "managerEmail": { "type": "string", "maxLength": 120 },
+        "managerName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 120 },
+        "createdByName": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId", "projectCode", "tenderId", "tenderTrackingCode", "title", "authority",
+        "contractAmount", "currency", "startDate", "endDate", "status",
+        "managerUid", "managerEmail", "managerName", "notes", "createdAt", "updatedAt"
+      ]
+    },
+    "ProjectTransaction": {
+      "title": "ProjectTransaction",
+      "description": "Proje gelen faturalar, kesilen faturalar, gelir ve gider hareketleri",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "projectId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "projectCode": { "type": "string", "maxLength": 32 },
+        "projectTitle": { "type": "string", "maxLength": 200 },
+        "tenderId": { "type": "string", "maxLength": 128 },
+        "tenderTrackingCode": { "type": "string", "maxLength": 32 },
+        "txType": { "type": "string", "enum": ["kesilen_fatura", "diger_gelir", "gelen_fatura", "gider"] },
+        "category": { "type": "string", "maxLength": 60 },
+        "companyId": { "type": "string", "maxLength": 128 },
+        "companyName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "invoiceNo": { "type": "string", "maxLength": 60 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "vatRate": { "type": "number" },
+        "subtotalAmount": { "type": "number" },
+        "vatAmount": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["TRY", "USD", "EUR"] },
+        "txDate": { "type": "string", "maxLength": 10, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "dueDate": { "type": "string", "maxLength": 10 },
+        "paymentMethod": { "type": "string", "enum": ["nakit", "banka_havale", "kredi_karti", "cek_senet", "vadeli"] },
+        "paymentStatus": { "type": "string", "enum": ["bekliyor", "odendi", "kismi", "iptal"] },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 120 },
+        "createdByName": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId", "projectId", "projectCode", "projectTitle", "tenderId", "tenderTrackingCode",
+        "txType", "category", "companyId", "companyName", "invoiceNo", "title",
+        "vatRate", "subtotalAmount", "vatAmount", "totalAmount", "paidAmount", "currency",
+        "txDate", "dueDate", "paymentMethod", "paymentStatus", "notes", "createdAt", "updatedAt"
+      ]
+    },
+    "SalesQuote": {
+      "title": "SalesQuote",
+      "description": "Özel sektör satışları için çoklu para birimli teklif mektubu ve proforma fatura kaydı",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "quoteNumber": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "docType": { "type": "string", "enum": ["teklif", "proforma"] },
+        "status": { "type": "string", "enum": ["taslak", "gonderildi", "revize", "siparis_onaylandi", "iptal"] },
+        "customerId": { "type": "string", "maxLength": 128 },
+        "customerName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "customerTaxOffice": { "type": "string", "maxLength": 80 },
+        "customerTaxNumber": { "type": "string", "maxLength": 20 },
+        "customerContactPerson": { "type": "string", "maxLength": 100 },
+        "customerPhone": { "type": "string", "maxLength": 30 },
+        "customerEmail": { "type": "string", "maxLength": 120 },
+        "customerAddress": { "type": "string", "maxLength": 240 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "issueDate": { "type": "string", "maxLength": 10, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "validUntilDate": { "type": "string", "maxLength": 10 },
+        "currency": { "type": "string", "enum": ["TRY", "USD", "EUR"] },
+        "exchangeNote": { "type": "string", "maxLength": 200 },
+        "deliveryTerms": { "type": "string", "maxLength": 300 },
+        "paymentTerms": { "type": "string", "maxLength": 300 },
+        "warrantyTerms": { "type": "string", "maxLength": 300 },
+        "bankInfo": { "type": "string", "maxLength": 300 },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "items": { "type": "array" },
+        "subtotalAmount": { "type": "number" },
+        "discountTotal": { "type": "number" },
+        "vatTotal": { "type": "number" },
+        "grandTotal": { "type": "number" },
+        "linkedProjectId": { "type": "string", "maxLength": 128 },
+        "linkedProjectCode": { "type": "string", "maxLength": 32 },
+        "orderConfirmedDate": { "type": "string", "maxLength": 10 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 120 },
+        "createdByName": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId", "quoteNumber", "docType", "status", "customerId", "customerName",
+        "customerTaxOffice", "customerTaxNumber", "customerContactPerson", "customerPhone",
+        "customerEmail", "customerAddress", "title", "issueDate", "validUntilDate",
+        "currency", "exchangeNote", "deliveryTerms", "paymentTerms", "warrantyTerms",
+        "bankInfo", "notes", "items", "subtotalAmount", "discountTotal", "vatTotal",
+        "grandTotal", "linkedProjectId", "linkedProjectCode", "orderConfirmedDate",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "TenderPricingSheet": {
+      "title": "TenderPricingSheet",
+      "description": "İhale operasyonu sekmesinde ürün bazlı maliyet, kâr, teslim finansmanı, vergi, nakliye ve 180 gün KDV finansmanı çalışma cetveli",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "tenderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "tenderTrackingCode": { "type": "string", "maxLength": 32 },
+        "tenderTitle": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "currency": { "type": "string", "enum": ["TRY", "USD", "EUR"] },
+        "annualFinancingRate": { "type": "number" },
+        "defaultDeliveryDays": { "type": "number" },
+        "vatFinancingBasis": { "type": "string", "enum": ["maliyet", "kdv_tutari"] },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "items": { "type": "array" },
+        "totalCost": { "type": "number" },
+        "totalProfit": { "type": "number" },
+        "totalDeliveryFinancing": { "type": "number" },
+        "totalTaxes": { "type": "number" },
+        "totalShipping": { "type": "number" },
+        "totalVatFinancing": { "type": "number" },
+        "totalBidNet": { "type": "number" },
+        "totalVat": { "type": "number" },
+        "totalBidGross": { "type": "number" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 120 },
+        "createdByName": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId", "tenderId", "tenderTrackingCode", "tenderTitle", "currency",
+        "annualFinancingRate", "defaultDeliveryDays", "vatFinancingBasis", "notes",
+        "items", "totalCost", "totalProfit", "totalDeliveryFinancing", "totalTaxes",
+        "totalShipping", "totalVatFinancing", "totalBidNet", "totalVat", "totalBidGross",
+        "createdAt", "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAuthorization" },
+      "description": "Kullanıcı rol ve izin kayıtları (RBAC)"
+    },
+    "/userInvites/{inviteId}": {
+      "schema": { "$ref": "#/entities/UserInvite" },
+      "description": "E-posta bazlı ön yetkilendirme davetleri"
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMarker" },
+      "description": "Yönetici yetki doğrulama kayıtları"
+    },
+    "/companyProfiles/{userId}": {
+      "schema": { "$ref": "#/entities/CompanyProfile" },
+      "description": "Firmaya özel şirket bilgileri ve bildirim tercihleri"
+    },
+    "/tenders/{tenderId}": {
+      "schema": { "$ref": "#/entities/Tender" },
+      "description": "Takvimle senkronize ihale kayıtları"
+    },
+    "/tenders/{tenderId}/documents/{docId}": {
+      "schema": { "$ref": "#/entities/TenderDocument" },
+      "description": "İhaleye bağlı doküman kasası kayıtları"
+    },
+    "/tenders/{tenderId}/documents/{docId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/DocumentChunk" },
+      "description": "İhale dokümanının güvenli ikili veri parçaları"
+    },
+    "/companyVault/{docId}": {
+      "schema": { "$ref": "#/entities/CompanyVaultDocument" },
+      "description": "Firma sabit kurumsal evrak kasası"
+    },
+    "/companyVault/{docId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/DocumentChunk" },
+      "description": "Firma sabit evrakının güvenli ikili veri parçaları"
+    },
+    "/bidProducts/{productId}": {
+      "schema": { "$ref": "#/entities/BidProduct" },
+      "description": "Teklif verilen ürün kartları"
+    },
+    "/accountingCompanies/{companyId}": {
+      "schema": { "$ref": "#/entities/AccountingCompany" },
+      "description": "Ön muhasebe cari firma kartları"
+    },
+    "/accountingEntries/{entryId}": {
+      "schema": { "$ref": "#/entities/AccountingEntry" },
+      "description": "Ön muhasebe fatura, tahsilat, ödeme ve gider kayıtları"
+    },
+    "/accountingCheques/{chequeId}": {
+      "schema": { "$ref": "#/entities/AccountingCheque" },
+      "description": "Ön muhasebe alınan ve verilen çek kayıtları"
+    },
+    "/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/Project" },
+      "description": "Kazanılan ihalelere bağlı proje yönetimi kayıtları"
+    },
+    "/projectTransactions/{txId}": {
+      "schema": { "$ref": "#/entities/ProjectTransaction" },
+      "description": "Proje gelen/kesilen fatura ve gider hareketleri"
+    },
+    "/salesQuotes/{quoteId}": {
+      "schema": { "$ref": "#/entities/SalesQuote" },
+      "description": "Özel sektör satışları için teklif mektubu ve proforma fatura kayıtları"
+    },
+    "/tenderPricingSheets/{sheetId}": {
+      "schema": { "$ref": "#/entities/TenderPricingSheet" },
+      "description": "İhale operasyonu fiyat çalışma ve maliyet analiz cetvelleri"
+    },
+    "/recycleBin/{trashId}": {
+      "schema": { "$ref": "#/entities/RecycleBinItem" },
+      "description": "Geri dönüşüm kutusu silinen kayıt arşivi"
+    },
+    "/recycleBin/{trashId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/DocumentChunk" },
+      "description": "Geri dönüşüm kutusundaki dokümanın ikili veri parçaları"
+    }
+  }
+}

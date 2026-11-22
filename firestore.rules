@@ -1,0 +1,1633 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Primitive Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidOptionalDate(val) {
+      return val is string && val.size() <= 10 && (val == '' || val.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'));
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrapAdmin() {
+      return isVerified() && request.auth.token.email.lower() == 'nitro888@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrapAdmin() || (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function hasUserRecord() {
+      return isVerified() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function currentUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActiveMemberOf(workspaceOwnerId) {
+      return isVerified() && (
+        (isBootstrapAdmin() && request.auth.uid == workspaceOwnerId)
+        || (
+          hasUserRecord()
+          && currentUserData().status == 'active'
+          && currentUserData().workspaceOwnerId == workspaceOwnerId
+        )
+      );
+    }
+
+    function isWorkspaceAdmin(workspaceOwnerId) {
+      return isAdmin() && (
+        request.auth.uid == workspaceOwnerId
+        || (
+          hasUserRecord()
+          && currentUserData().status == 'active'
+          && currentUserData().role == 'admin'
+          && currentUserData().workspaceOwnerId == workspaceOwnerId
+        )
+      );
+    }
+
+    function hasWorkspacePermission(workspaceOwnerId, permKey) {
+      return isWorkspaceAdmin(workspaceOwnerId)
+        || (
+          isActiveMemberOf(workspaceOwnerId)
+          && currentUserData().permissions[permKey] == true
+        );
+    }
+
+    function hasAccountingPermission(workspaceOwnerId) {
+      return isWorkspaceAdmin(workspaceOwnerId)
+        || (
+          isActiveMemberOf(workspaceOwnerId)
+          && (
+            ('canManageAccounting' in currentUserData().permissions && currentUserData().permissions.canManageAccounting == true)
+            || (!('canManageAccounting' in currentUserData().permissions) && (currentUserData().permissions.canManageProducts == true || currentUserData().permissions.canManageSettings == true))
+          )
+        );
+    }
+
+    function hasQuotesPermission(workspaceOwnerId) {
+      return isWorkspaceAdmin(workspaceOwnerId)
+        || (
+          isActiveMemberOf(workspaceOwnerId)
+          && (
+            ('canManageQuotes' in currentUserData().permissions && currentUserData().permissions.canManageQuotes == true)
+            || (!('canManageQuotes' in currentUserData().permissions) && (currentUserData().permissions.canManageProducts == true || currentUserData().permissions.canManageAccounting == true))
+          )
+        );
+    }
+
+    function hasProjectsViewPermission(workspaceOwnerId) {
+      return isWorkspaceAdmin(workspaceOwnerId)
+        || (
+          isActiveMemberOf(workspaceOwnerId)
+          && ('canViewProjects' in currentUserData().permissions && currentUserData().permissions.canViewProjects == true)
+        );
+    }
+
+    function hasPricingPermission(workspaceOwnerId) {
+      return isWorkspaceAdmin(workspaceOwnerId)
+        || (
+          isActiveMemberOf(workspaceOwnerId)
+          && ('canManagePricing' in currentUserData().permissions && currentUserData().permissions.canManagePricing == true)
+        );
+    }
+
+    function canQueryProjectsScreen() {
+      return isBootstrapAdmin()
+        || (
+          hasUserRecord()
+          && currentUserData().status == 'active'
+          && (
+            currentUserData().role == 'admin'
+            || ('canViewProjects' in currentUserData().permissions && currentUserData().permissions.canViewProjects == true)
+          )
+        );
+    }
+
+    function isValidPermissions(p) {
+      return p is map
+        && p.keys().hasAll([
+          'canCreateTender', 'canEditTender', 'canDeleteTender',
+          'canManageVault', 'canManageProducts', 'canAnalyzeDocuments', 'canManageSettings'
+        ])
+        && p.keys().hasOnly([
+          'canCreateTender', 'canEditTender', 'canDeleteTender',
+          'canManageVault', 'canManageProducts', 'canAnalyzeDocuments', 'canManageSettings',
+          'canManageAccounting', 'canViewProjects', 'canManageQuotes', 'canManagePricing'
+        ])
+        && p.canCreateTender is bool
+        && p.canEditTender is bool
+        && p.canDeleteTender is bool
+        && p.canManageVault is bool
+        && p.canManageProducts is bool
+        && p.canAnalyzeDocuments is bool
+        && p.canManageSettings is bool
+        && (!('canManageAccounting' in p) || p.canManageAccounting is bool)
+        && (!('canViewProjects' in p) || p.canViewProjects is bool)
+        && (!('canManageQuotes' in p) || p.canManageQuotes is bool)
+        && (!('canManagePricing' in p) || p.canManagePricing is bool);
+    }
+
+    function isValidMemberIds(data) {
+      return !('memberIds' in data) || (
+        data.memberIds is list
+        && data.memberIds.size() <= 50
+        && (data.memberIds.size() == 0 || (data.memberIds[0] is string && data.memberIds[0].size() >= 1 && data.memberIds[0].size() <= 128))
+      );
+    }
+
+    function isValidManagerUids(data) {
+      return !('managerUids' in data) || (
+        data.managerUids is list
+        && data.managerUids.size() <= 20
+        && (data.managerUids.size() == 0 || (data.managerUids[0] is string && data.managerUids[0].size() >= 1 && data.managerUids[0].size() <= 128))
+      );
+    }
+
+    function isRecordCreator(data) {
+      return ('createdBy' in data && data.createdBy is string && data.createdBy != '')
+        ? data.createdBy == request.auth.uid
+        : data.ownerId == request.auth.uid;
+    }
+
+    function isValidOptionalCreatorFields(data) {
+      return (!('createdBy' in data) || (data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 && isValidId(data.createdBy)))
+        && (!('createdByEmail' in data) || (data.createdByEmail is string && data.createdByEmail.size() <= 120))
+        && (!('createdByName' in data) || (data.createdByName is string && data.createdByName.size() <= 100));
+    }
+
+    function hasValidCreatorOnCreate(data) {
+      return ('createdBy' in data)
+        && ('createdByEmail' in data)
+        && ('createdByName' in data)
+        && data.createdBy == request.auth.uid
+        && data.createdByEmail.lower() == request.auth.token.email.lower();
+    }
+
+    function preservesCreatorOnUpdate(inData, exData) {
+      return (!('createdBy' in exData) || (('createdBy' in inData) && inData.createdBy == exData.createdBy))
+        && (!('createdByEmail' in exData) || (('createdByEmail' in inData) && inData.createdByEmail == exData.createdByEmail))
+        && (!('createdByName' in exData) || (('createdByName' in inData) && inData.createdByName == exData.createdByName));
+    }
+
+    // Validation Helpers
+    function isValidUserAuth(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'email', 'displayName', 'department', 'role', 'status',
+          'workspaceOwnerId', 'inviteId', 'permissions', 'approvedBy',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'department', 'role', 'status',
+          'workspaceOwnerId', 'inviteId', 'permissions', 'approvedBy',
+          'managerUids', 'createdAt', 'updatedAt'
+        ])
+        && data.uid is string && data.uid == userId && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 120
+        && data.displayName is string && data.displayName.size() <= 100
+        && data.department is string && data.department.size() <= 80
+        && data.role is string && data.role in ['admin', 'ihale_sorumlusu', 'onay_yetkilisi', 'goruntuleyici']
+        && data.status is string && data.status in ['pending', 'active', 'suspended']
+        && data.workspaceOwnerId is string && data.workspaceOwnerId.size() <= 128 && (data.workspaceOwnerId == '' || isValidId(data.workspaceOwnerId))
+        && data.inviteId is string && data.inviteId.size() <= 128 && (data.inviteId == '' || isValidId(data.inviteId))
+        && isValidPermissions(data.permissions)
+        && data.approvedBy is string && data.approvedBy.size() <= 128 && (data.approvedBy == '' || isValidId(data.approvedBy))
+        && isValidManagerUids(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserInvite(data) {
+      return data.keys().hasAll([
+          'email', 'displayName', 'department', 'role', 'workspaceOwnerId',
+          'permissions', 'invitedBy', 'status', 'claimedBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'email', 'displayName', 'department', 'role', 'workspaceOwnerId',
+          'permissions', 'invitedBy', 'status', 'claimedBy', 'createdAt', 'updatedAt'
+        ])
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 120
+        && data.displayName is string && data.displayName.size() <= 100
+        && data.department is string && data.department.size() <= 80
+        && data.role is string && data.role in ['admin', 'ihale_sorumlusu', 'onay_yetkilisi', 'goruntuleyici']
+        && data.workspaceOwnerId is string && data.workspaceOwnerId.size() >= 1 && data.workspaceOwnerId.size() <= 128 && isValidId(data.workspaceOwnerId)
+        && isValidPermissions(data.permissions)
+        && data.invitedBy is string && data.invitedBy.size() >= 1 && data.invitedBy.size() <= 128 && isValidId(data.invitedBy)
+        && data.status is string && data.status in ['pending_claim', 'claimed']
+        && data.claimedBy is string && data.claimedBy.size() <= 128 && (data.claimedBy == '' || isValidId(data.claimedBy))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminDoc(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'grantedBy', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'grantedBy', 'createdAt'])
+        && data.uid is string && data.uid == userId && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 120
+        && data.grantedBy is string && data.grantedBy.size() >= 1 && data.grantedBy.size() <= 128 && isValidId(data.grantedBy)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCompanyProfile(data) {
+      return data.keys().hasAll([
+          'ownerId', 'companyName', 'taxOffice', 'taxNumber',
+          'authorizedPerson', 'phone', 'email', 'defaultReminderDays', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'companyName', 'taxOffice', 'taxNumber',
+          'authorizedPerson', 'phone', 'email', 'defaultReminderDays', 'memberIds', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.companyName is string && data.companyName.size() >= 1 && data.companyName.size() <= 120
+        && data.taxOffice is string && data.taxOffice.size() <= 80
+        && data.taxNumber is string && data.taxNumber.size() <= 20
+        && data.authorizedPerson is string && data.authorizedPerson.size() <= 100
+        && data.phone is string && data.phone.size() <= 30
+        && data.email is string && data.email.size() <= 120
+        && data.defaultReminderDays is number && data.defaultReminderDays >= 0 && data.defaultReminderDays <= 30
+        && isValidMemberIds(data)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChecklist(c) {
+      return c is map
+        && c.keys().hasAll([
+          'idariSartname', 'teknikSartname', 'teklifMektubu',
+          'geciciTeminat', 'imzaSirkuleri', 'birimFiyat'
+        ])
+        && c.keys().hasOnly([
+          'idariSartname', 'teknikSartname', 'teklifMektubu',
+          'geciciTeminat', 'imzaSirkuleri', 'birimFiyat'
+        ])
+        && c.idariSartname is bool
+        && c.teknikSartname is bool
+        && c.teklifMektubu is bool
+        && c.geciciTeminat is bool
+        && c.imzaSirkuleri is bool
+        && c.birimFiyat is bool;
+    }
+
+    function isValidTender(data) {
+      return data.keys().hasAll([
+          'ownerId', 'trackingCode', 'ikn', 'title', 'authority',
+          'tenderDate', 'tenderTime', 'location', 'procurementType',
+          'estimatedAmount', 'bidBondAmount', 'currency', 'status',
+          'notes', 'checklist', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'trackingCode', 'ikn', 'title', 'authority',
+          'tenderDate', 'tenderTime', 'location', 'procurementType',
+          'estimatedAmount', 'bidBondAmount', 'currency', 'status',
+          'notes', 'checklist', 'memberIds', 'createdBy', 'createdByEmail',
+          'createdByName', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.trackingCode is string && data.trackingCode.size() >= 1 && data.trackingCode.size() <= 32
+        && data.ikn is string && data.ikn.size() <= 40
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.authority is string && data.authority.size() >= 1 && data.authority.size() <= 160
+        && data.tenderDate is string && data.tenderDate.size() == 10 && data.tenderDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.tenderTime is string && data.tenderTime.size() == 5 && data.tenderTime.matches('^[0-9]{2}:[0-9]{2}$')
+        && data.location is string && data.location.size() <= 160
+        && data.procurementType is string && data.procurementType.size() <= 32 && data.procurementType in ['acik_ihale', 'belli_istekliler', 'pazarlik', 'dogrudan_temin']
+        && data.estimatedAmount is number && data.estimatedAmount >= 0
+        && data.bidBondAmount is number && data.bidBondAmount >= 0
+        && data.currency is string && data.currency.size() == 3 && data.currency in ['TRY', 'USD', 'EUR']
+        && data.status is string && data.status.size() <= 32 && data.status in ['hazirlik', 'onay_bekliyor', 'teslim_edildi', 'kazanildi', 'sonuclandi', 'iptal']
+        && data.notes is string && data.notes.size() <= 2000
+        && isValidChecklist(data.checklist)
+        && isValidMemberIds(data)
+        && isValidOptionalCreatorFields(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTenderDoc(data, tenderId) {
+      return data.keys().hasAll([
+          'ownerId', 'tenderId', 'name', 'category', 'mimeType',
+          'sizeBytes', 'chunkCount', 'sha256', 'verified', 'notes',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'tenderId', 'name', 'category', 'mimeType',
+          'sizeBytes', 'chunkCount', 'sha256', 'verified', 'notes',
+          'memberIds', 'createdBy', 'createdByEmail', 'createdByName',
+          'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.tenderId is string && data.tenderId.size() >= 1 && data.tenderId.size() <= 128 && data.tenderId == tenderId
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 200
+        && data.category is string && data.category.size() <= 40 && data.category in [
+          'idari_sartname', 'teknik_sartname', 'teklif_mektubu',
+          'gecici_teminat', 'birim_fiyat', 'yetki_belgesi', 'zeyilname', 'diger'
+        ]
+        && data.mimeType is string && data.mimeType.size() >= 1 && data.mimeType.size() <= 120
+        && data.sizeBytes is number && data.sizeBytes >= 1 && data.sizeBytes <= 10485760
+        && data.chunkCount is number && data.chunkCount >= 1 && data.chunkCount <= 40
+        && data.sha256 is string && data.sha256.size() == 64
+        && data.verified is bool
+        && data.notes is string && data.notes.size() <= 500
+        && isValidMemberIds(data)
+        && isValidOptionalCreatorFields(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCompanyVaultDoc(data) {
+      return data.keys().hasAll([
+          'ownerId', 'name', 'category', 'mimeType', 'sizeBytes',
+          'chunkCount', 'sha256', 'expiryDate', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'name', 'category', 'mimeType', 'sizeBytes',
+          'chunkCount', 'sha256', 'expiryDate', 'memberIds',
+          'createdBy', 'createdByEmail', 'createdByName', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 200
+        && data.category is string && data.category.size() <= 40 && data.category in [
+          'imza_sirkuleri', 'vergi_levhasi', 'ticaret_sicil',
+          'oda_kayit', 'borcu_yoktur', 'is_bitirme', 'teminat_mektubu', 'diger'
+        ]
+        && data.mimeType is string && data.mimeType.size() >= 1 && data.mimeType.size() <= 120
+        && data.sizeBytes is number && data.sizeBytes >= 1 && data.sizeBytes <= 10485760
+        && data.chunkCount is number && data.chunkCount >= 1 && data.chunkCount <= 40
+        && data.sha256 is string && data.sha256.size() == 64
+        && data.expiryDate is string && data.expiryDate.size() <= 10
+        && isValidMemberIds(data)
+        && isValidOptionalCreatorFields(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChunk(data, docId) {
+      return data.keys().hasAll(['ownerId', 'docId', 'index', 'data', 'createdAt'])
+        && data.keys().hasOnly([
+          'ownerId', 'docId', 'index', 'data', 'memberIds',
+          'createdBy', 'createdByEmail', 'createdByName', 'createdAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.docId is string && data.docId.size() >= 1 && data.docId.size() <= 128 && data.docId == docId
+        && data.index is number && data.index >= 0 && data.index <= 39
+        && data.data is string && data.data.size() >= 1 && data.data.size() <= 500000
+        && isValidMemberIds(data)
+        && isValidOptionalCreatorFields(data)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidBidProduct(data) {
+      return data.keys().hasAll([
+          'ownerId', 'tenderId', 'tenderTrackingCode', 'stockNumber', 'partNumber',
+          'materialName', 'supplierCompany', 'priceDate', 'offeredSalePrice',
+          'currency', 'purchaseDate', 'quotedDate', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'tenderId', 'tenderTrackingCode', 'stockNumber', 'partNumber',
+          'materialName', 'supplierCompany', 'priceDate', 'offeredSalePrice',
+          'currency', 'purchaseDate', 'quotedDate', 'memberIds',
+          'createdBy', 'createdByEmail', 'createdByName', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.tenderId is string && data.tenderId.size() <= 128 && (data.tenderId == '' || isValidId(data.tenderId))
+        && data.tenderTrackingCode is string && data.tenderTrackingCode.size() <= 32
+        && data.stockNumber is string && data.stockNumber.size() <= 60
+        && data.partNumber is string && data.partNumber.size() <= 60
+        && data.materialName is string && data.materialName.size() >= 1 && data.materialName.size() <= 200
+        && data.supplierCompany is string && data.supplierCompany.size() >= 1 && data.supplierCompany.size() <= 160
+        && isValidOptionalDate(data.priceDate)
+        && data.offeredSalePrice is number && data.offeredSalePrice >= 0
+        && data.currency is string && data.currency.size() == 3 && data.currency in ['TRY', 'USD', 'EUR']
+        && isValidOptionalDate(data.purchaseDate)
+        && isValidOptionalDate(data.quotedDate)
+        && isValidMemberIds(data)
+        && isValidOptionalCreatorFields(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAccountingCompany(data) {
+      return data.keys().hasAll([
+          'ownerId', 'name', 'companyType', 'taxOffice', 'taxNumber',
+          'contactPerson', 'phone', 'email', 'address', 'iban', 'notes',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'name', 'companyType', 'taxOffice', 'taxNumber',
+          'contactPerson', 'phone', 'email', 'address', 'iban', 'notes',
+          'memberIds', 'createdBy', 'createdByEmail', 'createdByName',
+          'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 160
+        && data.companyType is string && data.companyType.size() <= 32 && data.companyType in ['tedarikci', 'musteri', 'her_ikisi']
+        && data.taxOffice is string && data.taxOffice.size() <= 80
+        && data.taxNumber is string && data.taxNumber.size() <= 20
+        && data.contactPerson is string && data.contactPerson.size() <= 100
+        && data.phone is string && data.phone.size() <= 30
+        && data.email is string && data.email.size() <= 120
+        && data.address is string && data.address.size() <= 240
+        && data.iban is string && data.iban.size() <= 40
+        && data.notes is string && data.notes.size() <= 2000
+        && isValidMemberIds(data)
+        && isValidOptionalCreatorFields(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAccountingEntry(data) {
+      return data.keys().hasAll([
+          'ownerId', 'entryType', 'companyId', 'companyName', 'invoiceNo', 'title',
+          'stockNumber', 'partNumber', 'quantity', 'unit', 'unitPrice', 'vatRate',
+          'subtotalAmount', 'vatAmount', 'totalAmount', 'paidAmount', 'currency',
+          'entryDate', 'dueDate', 'paymentMethod', 'paymentStatus',
+          'tenderId', 'tenderTrackingCode', 'notes', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'entryType', 'companyId', 'companyName', 'invoiceNo', 'title',
+          'stockNumber', 'partNumber', 'quantity', 'unit', 'unitPrice', 'vatRate',
+          'subtotalAmount', 'vatAmount', 'totalAmount', 'paidAmount', 'currency',
+          'entryDate', 'dueDate', 'paymentMethod', 'paymentStatus',
+          'tenderId', 'tenderTrackingCode', 'notes', 'memberIds',
+          'createdBy', 'createdByEmail', 'createdByName', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.entryType is string && data.entryType.size() <= 32 && data.entryType in ['alis_faturasi', 'satis_faturasi', 'tahsilat', 'odeme', 'gider']
+        && data.companyId is string && data.companyId.size() <= 128 && (data.companyId == '' || isValidId(data.companyId))
+        && data.companyName is string && data.companyName.size() >= 1 && data.companyName.size() <= 160
+        && data.invoiceNo is string && data.invoiceNo.size() <= 60
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.stockNumber is string && data.stockNumber.size() <= 60
+        && data.partNumber is string && data.partNumber.size() <= 60
+        && data.quantity is number && data.quantity >= 0
+        && data.unit is string && data.unit.size() <= 30
+        && data.unitPrice is number && data.unitPrice >= 0
+        && data.vatRate is number && data.vatRate >= 0 && data.vatRate <= 100
+        && data.subtotalAmount is number && data.subtotalAmount >= 0
+        && data.vatAmount is number && data.vatAmount >= 0
+        && data.totalAmount is number && data.totalAmount >= 0
+        && data.paidAmount is number && data.paidAmount >= 0
+        && data.currency is string && data.currency.size() == 3 && data.currency in ['TRY', 'USD', 'EUR']
+        && data.entryDate is string && data.entryDate.size() == 10 && data.entryDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && isValidOptionalDate(data.dueDate)
+        && data.paymentMethod is string && data.paymentMethod.size() <= 32 && data.paymentMethod in ['nakit', 'banka_havale', 'kredi_karti', 'cek_senet', 'vadeli']
+        && data.paymentStatus is string && data.paymentStatus.size() <= 32 && data.paymentStatus in ['bekliyor', 'odendi', 'kismi', 'iptal']
+        && data.tenderId is string && data.tenderId.size() <= 128 && (data.tenderId == '' || isValidId(data.tenderId))
+        && data.tenderTrackingCode is string && data.tenderTrackingCode.size() <= 32
+        && data.notes is string && data.notes.size() <= 2000
+        && isValidMemberIds(data)
+        && isValidOptionalCreatorFields(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAccountingCheque(data) {
+      return data.keys().hasAll([
+          'ownerId', 'direction', 'chequeNo', 'bankName', 'branchName', 'drawerName',
+          'companyId', 'companyName', 'endorsedTo', 'issueDate', 'dueDate', 'amount',
+          'currency', 'status', 'tenderId', 'tenderTrackingCode', 'notes', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'direction', 'chequeNo', 'bankName', 'branchName', 'drawerName',
+          'companyId', 'companyName', 'endorsedTo', 'issueDate', 'dueDate', 'amount',
+          'currency', 'status', 'tenderId', 'tenderTrackingCode', 'notes', 'memberIds',
+          'createdBy', 'createdByEmail', 'createdByName', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.direction is string && data.direction.size() <= 16 && data.direction in ['alinan', 'verilen']
+        && data.chequeNo is string && data.chequeNo.size() >= 1 && data.chequeNo.size() <= 60
+        && data.bankName is string && data.bankName.size() >= 1 && data.bankName.size() <= 100
+        && data.branchName is string && data.branchName.size() <= 100
+        && data.drawerName is string && data.drawerName.size() <= 160
+        && data.companyId is string && data.companyId.size() <= 128 && (data.companyId == '' || isValidId(data.companyId))
+        && data.companyName is string && data.companyName.size() >= 1 && data.companyName.size() <= 160
+        && data.endorsedTo is string && data.endorsedTo.size() <= 160
+        && isValidOptionalDate(data.issueDate)
+        && data.dueDate is string && data.dueDate.size() == 10 && data.dueDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.amount is number && data.amount >= 0
+        && data.currency is string && data.currency.size() == 3 && data.currency in ['TRY', 'USD', 'EUR']
+        && data.status is string && data.status.size() <= 32 && data.status in [
+          'portfoyde', 'tahsile_verildi', 'ciro_edildi', 'tahsil_edildi', 'odendi', 'karsiliksiz', 'iade'
+        ]
+        && data.tenderId is string && data.tenderId.size() <= 128 && (data.tenderId == '' || isValidId(data.tenderId))
+        && data.tenderTrackingCode is string && data.tenderTrackingCode.size() <= 32
+        && data.notes is string && data.notes.size() <= 2000
+        && isValidMemberIds(data)
+        && isValidOptionalCreatorFields(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProject(data) {
+      return data.keys().hasAll([
+          'ownerId', 'projectCode', 'tenderId', 'tenderTrackingCode', 'title', 'authority',
+          'contractAmount', 'currency', 'startDate', 'endDate', 'status',
+          'managerUid', 'managerEmail', 'managerName', 'notes', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'projectCode', 'tenderId', 'tenderTrackingCode', 'quoteId', 'quoteNumber',
+          'title', 'authority', 'contractAmount', 'currency', 'startDate', 'endDate', 'status',
+          'managerUid', 'managerEmail', 'managerName', 'notes', 'memberIds',
+          'createdBy', 'createdByEmail', 'createdByName', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.projectCode is string && data.projectCode.size() >= 1 && data.projectCode.size() <= 32
+        && data.tenderId is string && data.tenderId.size() <= 128 && (data.tenderId == '' || isValidId(data.tenderId))
+        && data.tenderTrackingCode is string && data.tenderTrackingCode.size() <= 32
+        && (!('quoteId' in data) || (data.quoteId is string && data.quoteId.size() <= 128 && (data.quoteId == '' || isValidId(data.quoteId))))
+        && (!('quoteNumber' in data) || (data.quoteNumber is string && data.quoteNumber.size() <= 40))
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.authority is string && data.authority.size() >= 1 && data.authority.size() <= 160
+        && data.contractAmount is number && data.contractAmount >= 0
+        && data.currency is string && data.currency.size() == 3 && data.currency in ['TRY', 'USD', 'EUR']
+        && data.startDate is string && data.startDate.size() == 10 && data.startDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && isValidOptionalDate(data.endDate)
+        && data.status is string && data.status.size() <= 32 && data.status in ['planlama', 'aktif', 'askida', 'tamamlandi', 'iptal']
+        && data.managerUid is string && data.managerUid.size() >= 1 && data.managerUid.size() <= 128 && isValidId(data.managerUid)
+        && data.managerEmail is string && data.managerEmail.size() <= 120
+        && data.managerName is string && data.managerName.size() >= 1 && data.managerName.size() <= 100
+        && data.notes is string && data.notes.size() <= 2000
+        && isValidMemberIds(data)
+        && isValidOptionalCreatorFields(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSalesQuote(data) {
+      return data.keys().hasAll([
+          'ownerId', 'quoteNumber', 'docType', 'status', 'customerId', 'customerName',
+          'customerTaxOffice', 'customerTaxNumber', 'customerContactPerson', 'customerPhone',
+          'customerEmail', 'customerAddress', 'title', 'issueDate', 'validUntilDate',
+          'currency', 'exchangeNote', 'deliveryTerms', 'paymentTerms', 'warrantyTerms',
+          'bankInfo', 'notes', 'items', 'subtotalAmount', 'discountTotal', 'vatTotal',
+          'grandTotal', 'linkedProjectId', 'linkedProjectCode', 'orderConfirmedDate',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'quoteNumber', 'docType', 'status', 'customerId', 'customerName',
+          'customerTaxOffice', 'customerTaxNumber', 'customerContactPerson', 'customerPhone',
+          'customerEmail', 'customerAddress', 'title', 'issueDate', 'validUntilDate',
+          'currency', 'exchangeNote', 'deliveryTerms', 'paymentTerms', 'warrantyTerms',
+          'bankInfo', 'notes', 'items', 'subtotalAmount', 'discountTotal', 'vatTotal',
+          'grandTotal', 'linkedProjectId', 'linkedProjectCode', 'orderConfirmedDate',
+          'memberIds', 'createdBy', 'createdByEmail', 'createdByName', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.quoteNumber is string && data.quoteNumber.size() >= 1 && data.quoteNumber.size() <= 40
+        && data.docType is string && data.docType.size() <= 16 && data.docType in ['teklif', 'proforma']
+        && data.status is string && data.status.size() <= 32 && data.status in ['taslak', 'gonderildi', 'revize', 'siparis_onaylandi', 'iptal']
+        && data.customerId is string && data.customerId.size() <= 128 && (data.customerId == '' || isValidId(data.customerId))
+        && data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 160
+        && data.customerTaxOffice is string && data.customerTaxOffice.size() <= 80
+        && data.customerTaxNumber is string && data.customerTaxNumber.size() <= 20
+        && data.customerContactPerson is string && data.customerContactPerson.size() <= 100
+        && data.customerPhone is string && data.customerPhone.size() <= 30
+        && data.customerEmail is string && data.customerEmail.size() <= 120
+        && data.customerAddress is string && data.customerAddress.size() <= 240
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.issueDate is string && data.issueDate.size() == 10 && data.issueDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && isValidOptionalDate(data.validUntilDate)
+        && data.currency is string && data.currency.size() == 3 && data.currency in ['TRY', 'USD', 'EUR']
+        && data.exchangeNote is string && data.exchangeNote.size() <= 200
+        && data.deliveryTerms is string && data.deliveryTerms.size() <= 300
+        && data.paymentTerms is string && data.paymentTerms.size() <= 300
+        && data.warrantyTerms is string && data.warrantyTerms.size() <= 300
+        && data.bankInfo is string && data.bankInfo.size() <= 300
+        && data.notes is string && data.notes.size() <= 2000
+        && data.items is list && data.items.size() <= 100
+        && (data.items.size() == 0 || (data.items[0] is map && data.items[0].materialName is string && data.items[0].materialName.size() <= 200))
+        && data.subtotalAmount is number && data.subtotalAmount >= 0
+        && data.discountTotal is number && data.discountTotal >= 0
+        && data.vatTotal is number && data.vatTotal >= 0
+        && data.grandTotal is number && data.grandTotal >= 0
+        && data.linkedProjectId is string && data.linkedProjectId.size() <= 128 && (data.linkedProjectId == '' || isValidId(data.linkedProjectId))
+        && data.linkedProjectCode is string && data.linkedProjectCode.size() <= 32
+        && isValidOptionalDate(data.orderConfirmedDate)
+        && isValidMemberIds(data)
+        && isValidOptionalCreatorFields(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTenderPricingSheet(data) {
+      return data.keys().hasAll([
+          'ownerId', 'tenderId', 'tenderTrackingCode', 'tenderTitle', 'currency',
+          'annualFinancingRate', 'defaultDeliveryDays', 'vatFinancingBasis', 'notes',
+          'items', 'totalCost', 'totalProfit', 'totalDeliveryFinancing', 'totalTaxes',
+          'totalShipping', 'totalVatFinancing', 'totalBidNet', 'totalVat', 'totalBidGross',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'tenderId', 'tenderTrackingCode', 'tenderTitle', 'currency',
+          'annualFinancingRate', 'defaultDeliveryDays', 'vatFinancingBasis', 'notes',
+          'items', 'totalCost', 'totalProfit', 'totalDeliveryFinancing', 'totalTaxes',
+          'totalShipping', 'totalVatFinancing', 'totalBidNet', 'totalVat', 'totalBidGross',
+          'memberIds', 'createdBy', 'createdByEmail', 'createdByName', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.tenderId is string && data.tenderId.size() >= 1 && data.tenderId.size() <= 128 && isValidId(data.tenderId)
+        && data.tenderTrackingCode is string && data.tenderTrackingCode.size() <= 32
+        && data.tenderTitle is string && data.tenderTitle.size() >= 1 && data.tenderTitle.size() <= 200
+        && data.currency is string && data.currency.size() == 3 && data.currency in ['TRY', 'USD', 'EUR']
+        && data.annualFinancingRate is number && data.annualFinancingRate >= 0 && data.annualFinancingRate <= 500
+        && data.defaultDeliveryDays is number && data.defaultDeliveryDays >= 0 && data.defaultDeliveryDays <= 3650
+        && data.vatFinancingBasis is string && data.vatFinancingBasis.size() <= 32 && data.vatFinancingBasis in ['maliyet', 'kdv_tutari']
+        && data.notes is string && data.notes.size() <= 2000
+        && data.items is list && data.items.size() <= 150
+        && (data.items.size() == 0 || (data.items[0] is map && data.items[0].materialName is string && data.items[0].materialName.size() <= 200))
+        && data.totalCost is number && data.totalCost >= 0
+        && data.totalProfit is number && data.totalProfit >= 0
+        && data.totalDeliveryFinancing is number && data.totalDeliveryFinancing >= 0
+        && data.totalTaxes is number && data.totalTaxes >= 0
+        && data.totalShipping is number && data.totalShipping >= 0
+        && data.totalVatFinancing is number && data.totalVatFinancing >= 0
+        && data.totalBidNet is number && data.totalBidNet >= 0
+        && data.totalVat is number && data.totalVat >= 0
+        && data.totalBidGross is number && data.totalBidGross >= 0
+        && isValidMemberIds(data)
+        && isValidOptionalCreatorFields(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProjectTransaction(data) {
+      return data.keys().hasAll([
+          'ownerId', 'projectId', 'projectCode', 'projectTitle', 'tenderId', 'tenderTrackingCode',
+          'txType', 'category', 'companyId', 'companyName', 'invoiceNo', 'title',
+          'vatRate', 'subtotalAmount', 'vatAmount', 'totalAmount', 'paidAmount', 'currency',
+          'txDate', 'dueDate', 'paymentMethod', 'paymentStatus', 'notes', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'projectId', 'projectCode', 'projectTitle', 'tenderId', 'tenderTrackingCode',
+          'txType', 'category', 'companyId', 'companyName', 'invoiceNo', 'title',
+          'vatRate', 'subtotalAmount', 'vatAmount', 'totalAmount', 'paidAmount', 'currency',
+          'txDate', 'dueDate', 'paymentMethod', 'paymentStatus', 'notes', 'memberIds',
+          'createdBy', 'createdByEmail', 'createdByName', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.projectId is string && data.projectId.size() >= 1 && data.projectId.size() <= 128 && isValidId(data.projectId)
+        && data.projectCode is string && data.projectCode.size() <= 32
+        && data.projectTitle is string && data.projectTitle.size() <= 200
+        && data.tenderId is string && data.tenderId.size() <= 128 && (data.tenderId == '' || isValidId(data.tenderId))
+        && data.tenderTrackingCode is string && data.tenderTrackingCode.size() <= 32
+        && data.txType is string && data.txType.size() <= 32 && data.txType in ['kesilen_fatura', 'diger_gelir', 'gelen_fatura', 'gider']
+        && data.category is string && data.category.size() <= 60
+        && data.companyId is string && data.companyId.size() <= 128 && (data.companyId == '' || isValidId(data.companyId))
+        && data.companyName is string && data.companyName.size() >= 1 && data.companyName.size() <= 160
+        && data.invoiceNo is string && data.invoiceNo.size() <= 60
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.vatRate is number && data.vatRate >= 0 && data.vatRate <= 100
+        && data.subtotalAmount is number && data.subtotalAmount >= 0
+        && data.vatAmount is number && data.vatAmount >= 0
+        && data.totalAmount is number && data.totalAmount >= 0
+        && data.paidAmount is number && data.paidAmount >= 0
+        && data.currency is string && data.currency.size() == 3 && data.currency in ['TRY', 'USD', 'EUR']
+        && data.txDate is string && data.txDate.size() == 10 && data.txDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && isValidOptionalDate(data.dueDate)
+        && data.paymentMethod is string && data.paymentMethod.size() <= 32 && data.paymentMethod in ['nakit', 'banka_havale', 'kredi_karti', 'cek_senet', 'vadeli']
+        && data.paymentStatus is string && data.paymentStatus.size() <= 32 && data.paymentStatus in ['bekliyor', 'odendi', 'kismi', 'iptal']
+        && data.notes is string && data.notes.size() <= 2000
+        && isValidMemberIds(data)
+        && isValidOptionalCreatorFields(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidRecycleBinItem(data) {
+      return data.keys().hasAll([
+          'ownerId', 'entityType', 'originalId', 'parentTenderId', 'parentTenderCode',
+          'title', 'subtitle', 'createdBy', 'createdByEmail', 'createdByName',
+          'deletedBy', 'deletedByEmail', 'deletedByName', 'deletedAt', 'payload', 'chunkCount'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'entityType', 'originalId', 'parentTenderId', 'parentTenderCode',
+          'title', 'subtitle', 'createdBy', 'createdByEmail', 'createdByName',
+          'deletedBy', 'deletedByEmail', 'deletedByName', 'deletedAt', 'payload', 'chunkCount',
+          'memberIds'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
+        && data.entityType is string && data.entityType in ['tender', 'tender_document', 'company_vault', 'bid_product', 'accounting_company', 'accounting_entry', 'accounting_cheque', 'project', 'project_transaction', 'sales_quote']
+        && data.originalId is string && data.originalId.size() >= 1 && data.originalId.size() <= 128 && isValidId(data.originalId)
+        && data.parentTenderId is string && data.parentTenderId.size() <= 128 && (data.parentTenderId == '' || isValidId(data.parentTenderId))
+        && data.parentTenderCode is string && data.parentTenderCode.size() <= 64
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.subtitle is string && data.subtitle.size() <= 200
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 && isValidId(data.createdBy)
+        && data.createdByEmail is string && data.createdByEmail.size() <= 120
+        && data.createdByName is string && data.createdByName.size() <= 100
+        && data.deletedBy is string && data.deletedBy.size() >= 1 && data.deletedBy.size() <= 128 && isValidId(data.deletedBy)
+        && data.deletedByEmail is string && data.deletedByEmail.size() >= 3 && data.deletedByEmail.size() <= 120
+        && data.deletedByName is string && data.deletedByName.size() <= 100
+        && data.deletedAt is timestamp
+        && data.payload is map
+        && data.chunkCount is number && data.chunkCount >= 0 && data.chunkCount <= 40
+        && isValidMemberIds(data);
+    }
+
+    function canReadTender(tenderId) {
+      return exists(/databases/$(database)/documents/tenders/$(tenderId))
+        && isActiveMemberOf(get(/databases/$(database)/documents/tenders/$(tenderId)).data.ownerId);
+    }
+
+    function canManageTenderVault(tenderId) {
+      return exists(/databases/$(database)/documents/tenders/$(tenderId))
+        && hasWorkspacePermission(get(/databases/$(database)/documents/tenders/$(tenderId)).data.ownerId, 'canManageVault');
+    }
+
+    function canReadTenderDoc(tenderId, docId) {
+      return canReadTender(tenderId)
+        && exists(/databases/$(database)/documents/tenders/$(tenderId)/documents/$(docId));
+    }
+
+    function canManageTenderDoc(tenderId, docId) {
+      return canManageTenderVault(tenderId)
+        && exists(/databases/$(database)/documents/tenders/$(tenderId)/documents/$(docId));
+    }
+
+    function canReadCompanyVaultDoc(docId) {
+      return exists(/databases/$(database)/documents/companyVault/$(docId))
+        && isActiveMemberOf(get(/databases/$(database)/documents/companyVault/$(docId)).data.ownerId);
+    }
+
+    function canManageCompanyVaultDoc(docId) {
+      return exists(/databases/$(database)/documents/companyVault/$(docId))
+        && hasWorkspacePermission(get(/databases/$(database)/documents/companyVault/$(docId)).data.ownerId, 'canManageVault');
+    }
+
+    function isProjectManager(projectId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId))
+        && get(/databases/$(database)/documents/projects/$(projectId)).data.managerUid == request.auth.uid;
+    }
+
+    // 0A. User Authorizations (RBAC + PII Isolation)
+    match /users/{userId} {
+      allow get: if isVerified() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isVerified() && (
+        resource.data.uid == request.auth.uid
+        || isBootstrapAdmin()
+        || ('managerUids' in resource.data && resource.data.managerUids is list && resource.data.managerUids.size() <= 20 && request.auth.uid in resource.data.managerUids)
+      );
+      allow create: if isVerified() && isValidId(userId)
+        && isValidUserAuth(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          (isBootstrapAdmin() && request.auth.uid == userId && incoming().role == 'admin' && incoming().status == 'active' && incoming().workspaceOwnerId == request.auth.uid)
+          || (isAdmin() && incoming().status in ['pending', 'active', 'suspended'])
+          || (
+            request.auth.uid == userId
+            && incoming().email.lower() == request.auth.token.email.lower()
+            && incoming().inviteId != ''
+            && exists(/databases/$(database)/documents/userInvites/$(incoming().inviteId))
+            && get(/databases/$(database)/documents/userInvites/$(incoming().inviteId)).data.email.lower() == request.auth.token.email.lower()
+            && get(/databases/$(database)/documents/userInvites/$(incoming().inviteId)).data.status == 'pending_claim'
+            && incoming().role == get(/databases/$(database)/documents/userInvites/$(incoming().inviteId)).data.role
+            && incoming().workspaceOwnerId == get(/databases/$(database)/documents/userInvites/$(incoming().inviteId)).data.workspaceOwnerId
+            && incoming().permissions == get(/databases/$(database)/documents/userInvites/$(incoming().inviteId)).data.permissions
+            && incoming().status == 'active'
+            && incoming().approvedBy == get(/databases/$(database)/documents/userInvites/$(incoming().inviteId)).data.invitedBy
+          )
+          || (
+            request.auth.uid == userId
+            && incoming().email.lower() == request.auth.token.email.lower()
+            && incoming().inviteId == ''
+            && incoming().role == 'goruntuleyici'
+            && incoming().status == 'pending'
+            && incoming().workspaceOwnerId == ''
+            && incoming().approvedBy == ''
+            && incoming().permissions.canCreateTender == false
+            && incoming().permissions.canEditTender == false
+            && incoming().permissions.canDeleteTender == false
+            && incoming().permissions.canManageVault == false
+            && incoming().permissions.canManageProducts == false
+            && incoming().permissions.canAnalyzeDocuments == false
+            && incoming().permissions.canManageSettings == false
+            && (!('canManageAccounting' in incoming().permissions) || incoming().permissions.canManageAccounting == false)
+            && (!('canViewProjects' in incoming().permissions) || incoming().permissions.canViewProjects == false)
+            && (!('canManageQuotes' in incoming().permissions) || incoming().permissions.canManageQuotes == false)
+            && (!('canManagePricing' in incoming().permissions) || incoming().permissions.canManagePricing == false)
+          )
+        );
+      allow update: if isVerified() && isValidId(userId)
+        && isValidUserAuth(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (
+            isAdmin()
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'department', 'role', 'status', 'workspaceOwnerId',
+              'permissions', 'approvedBy', 'managerUids', 'updatedAt'
+            ])
+          )
+          || (
+            request.auth.uid == userId
+            && existing().status == 'pending'
+            && existing().workspaceOwnerId == ''
+            && incoming().email.lower() == request.auth.token.email.lower()
+            && incoming().inviteId != ''
+            && exists(/databases/$(database)/documents/userInvites/$(incoming().inviteId))
+            && get(/databases/$(database)/documents/userInvites/$(incoming().inviteId)).data.email.lower() == request.auth.token.email.lower()
+            && get(/databases/$(database)/documents/userInvites/$(incoming().inviteId)).data.status == 'pending_claim'
+            && incoming().role == get(/databases/$(database)/documents/userInvites/$(incoming().inviteId)).data.role
+            && incoming().workspaceOwnerId == get(/databases/$(database)/documents/userInvites/$(incoming().inviteId)).data.workspaceOwnerId
+            && incoming().permissions == get(/databases/$(database)/documents/userInvites/$(incoming().inviteId)).data.permissions
+            && incoming().status == 'active'
+            && incoming().approvedBy == get(/databases/$(database)/documents/userInvites/$(incoming().inviteId)).data.invitedBy
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'department', 'role', 'status', 'workspaceOwnerId',
+              'inviteId', 'permissions', 'approvedBy', 'managerUids', 'updatedAt'
+            ])
+          )
+          || (
+            request.auth.uid == userId
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'department', 'updatedAt'])
+          )
+        );
+      allow delete: if isVerified() && isValidId(userId) && isAdmin() && request.auth.uid != userId;
+    }
+
+    // 0B. Email Pre-Authorization Invites
+    match /userInvites/{inviteId} {
+      allow get: if isVerified() && isValidId(inviteId) && (isAdmin() || existing().email.lower() == request.auth.token.email.lower());
+      allow list: if isVerified() && (
+        resource.data.email == request.auth.token.email.lower()
+        || resource.data.invitedBy == request.auth.uid
+        || isBootstrapAdmin()
+      );
+      allow create: if isVerified() && isValidId(inviteId)
+        && isValidUserInvite(incoming())
+        && isAdmin()
+        && incoming().status == 'pending_claim'
+        && incoming().claimedBy == ''
+        && incoming().invitedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified() && isValidId(inviteId)
+        && isValidUserInvite(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (
+            isAdmin()
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'department', 'role', 'permissions', 'status', 'updatedAt'
+            ])
+          )
+          || (
+            existing().status == 'pending_claim'
+            && existing().email.lower() == request.auth.token.email.lower()
+            && incoming().status == 'claimed'
+            && incoming().claimedBy == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'claimedBy', 'updatedAt'])
+          )
+        );
+      allow delete: if isVerified() && isValidId(inviteId) && isAdmin();
+    }
+
+    // 0C. Admin Role Markers
+    match /admins/{userId} {
+      allow get: if isVerified() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if false;
+      allow create: if isVerified() && isValidId(userId)
+        && isValidAdminDoc(incoming(), userId)
+        && incoming().createdAt == request.time
+        && (
+          (isBootstrapAdmin() && request.auth.uid == userId)
+          || isAdmin()
+          || (
+            request.auth.uid == userId
+            && hasUserRecord()
+            && currentUserData().role == 'admin'
+            && currentUserData().status == 'active'
+          )
+        );
+      allow update: if false;
+      allow delete: if isVerified() && isValidId(userId) && isAdmin() && request.auth.uid != userId;
+    }
+
+    // 1. Company Profiles (Workspace Authorized Access)
+    match /companyProfiles/{userId} {
+      allow get: if isVerified() && isValidId(userId) && isActiveMemberOf(userId);
+      allow list: if isVerified() && (
+        resource.data.ownerId == request.auth.uid
+        || isActiveMemberOf(resource.data.ownerId)
+        || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+      );
+      allow create: if isVerified() && isValidId(userId)
+        && isValidCompanyProfile(incoming())
+        && incoming().ownerId == userId
+        && incoming().updatedAt == request.time
+        && hasWorkspacePermission(userId, 'canManageSettings');
+      allow update: if isVerified() && isValidId(userId)
+        && isValidCompanyProfile(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().updatedAt == request.time
+        && (
+          (
+            hasWorkspacePermission(userId, 'canManageSettings')
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'companyName', 'taxOffice', 'taxNumber', 'authorizedPerson',
+              'phone', 'email', 'defaultReminderDays', 'memberIds', 'updatedAt'
+            ])
+          )
+          || (
+            isWorkspaceAdmin(userId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
+          )
+        );
+      allow delete: if isVerified() && isValidId(userId) && isWorkspaceAdmin(userId);
+    }
+
+    // 2. Tenders Collection
+    match /tenders/{tenderId} {
+      allow get: if isVerified() && isValidId(tenderId) && isActiveMemberOf(existing().ownerId);
+      allow list: if isVerified() && (
+        resource.data.ownerId == request.auth.uid
+        || isActiveMemberOf(resource.data.ownerId)
+        || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+      );
+      allow create: if isVerified() && isValidId(tenderId)
+        && isValidTender(incoming())
+        && hasValidCreatorOnCreate(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && hasWorkspacePermission(incoming().ownerId, 'canCreateTender');
+      allow update: if isVerified() && isValidId(tenderId)
+        && isValidTender(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && preservesCreatorOnUpdate(incoming(), existing())
+        && incoming().updatedAt == request.time
+        && (
+          (
+            isWorkspaceAdmin(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
+          )
+          || (
+            !(existing().status in ['sonuclandi', 'iptal'])
+            && hasWorkspacePermission(existing().ownerId, 'canEditTender')
+            && (
+              incoming().diff(existing()).affectedKeys().hasOnly(['checklist', 'updatedAt'])
+              || incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+              || incoming().diff(existing()).affectedKeys().hasOnly([
+                'trackingCode', 'ikn', 'title', 'authority', 'tenderDate', 'tenderTime',
+                'location', 'procurementType', 'estimatedAmount', 'bidBondAmount',
+                'currency', 'status', 'notes', 'checklist', 'memberIds', 'updatedAt'
+              ])
+            )
+          )
+        );
+      allow delete: if isVerified() && isValidId(tenderId)
+        && hasWorkspacePermission(existing().ownerId, 'canDeleteTender')
+        && isRecordCreator(existing());
+
+      // 3. Tender Analysis Archive Subcollection
+      match /analyses/{analysisId} {
+        allow get, list: if isVerified()
+          && isValidId(tenderId)
+          && isValidId(analysisId)
+          && canReadTender(tenderId);
+
+        allow create: if isVerified()
+          && isValidId(tenderId)
+          && isValidId(analysisId)
+          && exists(/databases/$(database)/documents/tenders/$(tenderId))
+          && incoming().keys().hasAll([
+            'id', 'ownerId', 'tenderId', 'mode', 'result',
+            'preferenceNote', 'memberIds',
+            'createdBy', 'createdByEmail', 'createdByName',
+            'createdAt', 'updatedAt'
+          ])
+          && incoming().keys().hasOnly([
+            'id', 'ownerId', 'tenderId', 'mode', 'result',
+            'preferenceNote', 'memberIds',
+            'createdBy', 'createdByEmail', 'createdByName',
+            'createdAt', 'updatedAt'
+          ])
+          && incoming().id == analysisId
+          && isValidId(incoming().ownerId)
+          && incoming().ownerId == get(/databases/$(database)/documents/tenders/$(tenderId)).data.ownerId
+          && incoming().tenderId == tenderId
+          && incoming().mode in ['summary', 'products']
+          && incoming().result is map
+          && incoming().preferenceNote is string
+          && incoming().preferenceNote.size() <= 2000
+          && isValidMemberIds(incoming())
+          && isValidOptionalCreatorFields(incoming())
+          && hasValidCreatorOnCreate(incoming())
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && hasWorkspacePermission(incoming().ownerId, 'canAnalyzeDocuments');
+
+        allow update, delete: if false;
+      }
+
+      // 3. Tender Documents Subcollection
+      match /documents/{docId} {
+        allow get: if isVerified() && isValidId(tenderId) && isValidId(docId)
+          && isActiveMemberOf(existing().ownerId) && canReadTender(tenderId);
+        allow list: if isVerified() && (
+          resource.data.ownerId == request.auth.uid
+          || isActiveMemberOf(resource.data.ownerId)
+          || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+        );
+        allow create: if isVerified() && isValidId(tenderId) && isValidId(docId)
+          && isValidTenderDoc(incoming(), tenderId)
+          && hasValidCreatorOnCreate(incoming())
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && canManageTenderVault(tenderId)
+          && hasWorkspacePermission(incoming().ownerId, 'canManageVault');
+        allow update: if isVerified() && isValidId(tenderId) && isValidId(docId)
+          && isValidTenderDoc(incoming(), tenderId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().tenderId == existing().tenderId
+          && incoming().createdAt == existing().createdAt
+          && preservesCreatorOnUpdate(incoming(), existing())
+          && incoming().updatedAt == request.time
+          && (
+            (
+              isWorkspaceAdmin(existing().ownerId)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
+            )
+            || (
+              canManageTenderVault(tenderId)
+              && hasWorkspacePermission(existing().ownerId, 'canManageVault')
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'verified', 'notes', 'category', 'name', 'memberIds', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isVerified() && isValidId(tenderId) && isValidId(docId)
+          && canManageTenderVault(tenderId)
+          && (hasWorkspacePermission(existing().ownerId, 'canManageVault') || hasWorkspacePermission(existing().ownerId, 'canDeleteTender'))
+          && isRecordCreator(existing());
+
+        // 4. Tender Document Binary Chunks Subcollection
+        match /chunks/{chunkId} {
+          allow get: if isVerified() && isValidId(tenderId) && isValidId(docId) && isValidId(chunkId)
+            && isActiveMemberOf(existing().ownerId) && canReadTenderDoc(tenderId, docId);
+          allow list: if isVerified() && (
+            resource.data.ownerId == request.auth.uid
+            || isActiveMemberOf(resource.data.ownerId)
+            || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+          );
+          allow create: if isVerified() && isValidId(tenderId) && isValidId(docId) && isValidId(chunkId)
+            && isValidChunk(incoming(), docId)
+            && hasValidCreatorOnCreate(incoming())
+            && incoming().createdAt == request.time
+            && canManageTenderDoc(tenderId, docId)
+            && hasWorkspacePermission(incoming().ownerId, 'canManageVault');
+          allow update: if isVerified() && isValidId(tenderId) && isValidId(docId) && isValidId(chunkId)
+            && isValidChunk(incoming(), docId)
+            && incoming().ownerId == existing().ownerId
+            && incoming().docId == existing().docId
+            && incoming().index == existing().index
+            && incoming().data == existing().data
+            && incoming().createdAt == existing().createdAt
+            && preservesCreatorOnUpdate(incoming(), existing())
+            && isWorkspaceAdmin(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds']);
+          allow delete: if isVerified() && isValidId(tenderId) && isValidId(docId) && isValidId(chunkId)
+            && (hasWorkspacePermission(existing().ownerId, 'canManageVault') || hasWorkspacePermission(existing().ownerId, 'canDeleteTender'))
+            && isRecordCreator(existing());
+        }
+      }
+    }
+
+    // 5. Company Master Vault Collection
+    match /companyVault/{docId} {
+      allow get: if isVerified() && isValidId(docId) && isActiveMemberOf(existing().ownerId);
+      allow list: if isVerified() && (
+        resource.data.ownerId == request.auth.uid
+        || isActiveMemberOf(resource.data.ownerId)
+        || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+      );
+      allow create: if isVerified() && isValidId(docId)
+        && isValidCompanyVaultDoc(incoming())
+        && hasValidCreatorOnCreate(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && hasWorkspacePermission(incoming().ownerId, 'canManageVault');
+      allow update: if isVerified() && isValidId(docId)
+        && isValidCompanyVaultDoc(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && preservesCreatorOnUpdate(incoming(), existing())
+        && incoming().updatedAt == request.time
+        && (
+          (
+            isWorkspaceAdmin(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
+          )
+          || (
+            hasWorkspacePermission(existing().ownerId, 'canManageVault')
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'category', 'expiryDate', 'memberIds', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerified() && isValidId(docId)
+        && hasWorkspacePermission(existing().ownerId, 'canManageVault')
+        && isRecordCreator(existing());
+
+      // 6. Company Master Vault Binary Chunks Subcollection
+      match /chunks/{chunkId} {
+        allow get: if isVerified() && isValidId(docId) && isValidId(chunkId)
+          && isActiveMemberOf(existing().ownerId) && canReadCompanyVaultDoc(docId);
+        allow list: if isVerified() && (
+          resource.data.ownerId == request.auth.uid
+          || isActiveMemberOf(resource.data.ownerId)
+          || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+        );
+        allow create: if isVerified() && isValidId(docId) && isValidId(chunkId)
+          && isValidChunk(incoming(), docId)
+          && hasValidCreatorOnCreate(incoming())
+          && incoming().createdAt == request.time
+          && canManageCompanyVaultDoc(docId)
+          && hasWorkspacePermission(incoming().ownerId, 'canManageVault');
+        allow update: if isVerified() && isValidId(docId) && isValidId(chunkId)
+          && isValidChunk(incoming(), docId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().docId == existing().docId
+          && incoming().index == existing().index
+          && incoming().data == existing().data
+          && incoming().createdAt == existing().createdAt
+          && preservesCreatorOnUpdate(incoming(), existing())
+          && isWorkspaceAdmin(existing().ownerId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds']);
+        allow delete: if isVerified() && isValidId(docId) && isValidId(chunkId)
+          && hasWorkspacePermission(existing().ownerId, 'canManageVault')
+          && isRecordCreator(existing());
+      }
+    }
+
+    // 7. Bid Products (Quoted Products Cards)
+    match /bidProducts/{productId} {
+      allow get: if isVerified() && isValidId(productId) && isActiveMemberOf(existing().ownerId);
+      allow list: if isVerified() && (
+        resource.data.ownerId == request.auth.uid
+        || isActiveMemberOf(resource.data.ownerId)
+        || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+      );
+      allow create: if isVerified() && isValidId(productId)
+        && isValidBidProduct(incoming())
+        && hasValidCreatorOnCreate(incoming())
+        && (incoming().tenderId == '' || canReadTender(incoming().tenderId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && hasWorkspacePermission(incoming().ownerId, 'canManageProducts');
+      allow update: if isVerified() && isValidId(productId)
+        && isValidBidProduct(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && preservesCreatorOnUpdate(incoming(), existing())
+        && incoming().updatedAt == request.time
+        && (incoming().tenderId == '' || canReadTender(incoming().tenderId))
+        && (
+          (
+            isWorkspaceAdmin(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
+          )
+          || (
+            hasWorkspacePermission(existing().ownerId, 'canManageProducts')
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'tenderId', 'tenderTrackingCode', 'stockNumber', 'partNumber',
+              'materialName', 'supplierCompany', 'priceDate', 'offeredSalePrice',
+              'currency', 'purchaseDate', 'quotedDate', 'memberIds', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerified() && isValidId(productId)
+        && hasWorkspacePermission(existing().ownerId, 'canManageProducts')
+        && isRecordCreator(existing());
+    }
+
+    // 7B. Accounting Companies (Ön Muhasebe Cari Firmalar)
+    match /accountingCompanies/{companyId} {
+      allow get: if isVerified() && isValidId(companyId) && isActiveMemberOf(existing().ownerId);
+      allow list: if isVerified() && (
+        resource.data.ownerId == request.auth.uid
+        || isActiveMemberOf(resource.data.ownerId)
+        || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+      );
+      allow create: if isVerified() && isValidId(companyId)
+        && isValidAccountingCompany(incoming())
+        && hasValidCreatorOnCreate(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && hasAccountingPermission(incoming().ownerId);
+      allow update: if isVerified() && isValidId(companyId)
+        && isValidAccountingCompany(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && preservesCreatorOnUpdate(incoming(), existing())
+        && incoming().updatedAt == request.time
+        && (
+          (
+            isWorkspaceAdmin(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
+          )
+          || (
+            hasAccountingPermission(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'companyType', 'taxOffice', 'taxNumber', 'contactPerson',
+              'phone', 'email', 'address', 'iban', 'notes', 'memberIds', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerified() && isValidId(companyId)
+        && hasAccountingPermission(existing().ownerId)
+        && isRecordCreator(existing());
+    }
+
+    // 7C. Accounting Entries (Ön Muhasebe Faturalar, Tahsilatlar, Ödemeler, Giderler)
+    match /accountingEntries/{entryId} {
+      allow get: if isVerified() && isValidId(entryId) && isActiveMemberOf(existing().ownerId);
+      allow list: if isVerified() && (
+        resource.data.ownerId == request.auth.uid
+        || isActiveMemberOf(resource.data.ownerId)
+        || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+      );
+      allow create: if isVerified() && isValidId(entryId)
+        && isValidAccountingEntry(incoming())
+        && hasValidCreatorOnCreate(incoming())
+        && (incoming().tenderId == '' || canReadTender(incoming().tenderId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && hasAccountingPermission(incoming().ownerId);
+      allow update: if isVerified() && isValidId(entryId)
+        && isValidAccountingEntry(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && preservesCreatorOnUpdate(incoming(), existing())
+        && incoming().updatedAt == request.time
+        && (incoming().tenderId == '' || canReadTender(incoming().tenderId))
+        && (
+          (
+            isWorkspaceAdmin(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
+          )
+          || (
+            hasAccountingPermission(existing().ownerId)
+            && (
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'paymentStatus', 'paidAmount', 'paymentMethod', 'updatedAt'
+              ])
+              || incoming().diff(existing()).affectedKeys().hasOnly([
+                'entryType', 'companyId', 'companyName', 'invoiceNo', 'title',
+                'stockNumber', 'partNumber', 'quantity', 'unit', 'unitPrice', 'vatRate',
+                'subtotalAmount', 'vatAmount', 'totalAmount', 'paidAmount', 'currency',
+                'entryDate', 'dueDate', 'paymentMethod', 'paymentStatus',
+                'tenderId', 'tenderTrackingCode', 'notes', 'memberIds', 'updatedAt'
+              ])
+            )
+          )
+        );
+      allow delete: if isVerified() && isValidId(entryId)
+        && hasAccountingPermission(existing().ownerId)
+        && isRecordCreator(existing());
+    }
+
+    // 7D. Accounting Cheques (Ön Muhasebe Alınan ve Verilen Çekler)
+    match /accountingCheques/{chequeId} {
+      allow get: if isVerified() && isValidId(chequeId) && isActiveMemberOf(existing().ownerId);
+      allow list: if isVerified() && (
+        resource.data.ownerId == request.auth.uid
+        || isActiveMemberOf(resource.data.ownerId)
+        || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+      );
+      allow create: if isVerified() && isValidId(chequeId)
+        && isValidAccountingCheque(incoming())
+        && hasValidCreatorOnCreate(incoming())
+        && (incoming().tenderId == '' || canReadTender(incoming().tenderId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && hasAccountingPermission(incoming().ownerId);
+      allow update: if isVerified() && isValidId(chequeId)
+        && isValidAccountingCheque(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && preservesCreatorOnUpdate(incoming(), existing())
+        && incoming().updatedAt == request.time
+        && (incoming().tenderId == '' || canReadTender(incoming().tenderId))
+        && (
+          (
+            isWorkspaceAdmin(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
+          )
+          || (
+            hasAccountingPermission(existing().ownerId)
+            && (
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'endorsedTo', 'updatedAt'
+              ])
+              || incoming().diff(existing()).affectedKeys().hasOnly([
+                'direction', 'chequeNo', 'bankName', 'branchName', 'drawerName',
+                'companyId', 'companyName', 'endorsedTo', 'issueDate', 'dueDate',
+                'amount', 'currency', 'status', 'tenderId', 'tenderTrackingCode',
+                'notes', 'memberIds', 'updatedAt'
+              ])
+            )
+          )
+        );
+      allow delete: if isVerified() && isValidId(chequeId)
+        && hasAccountingPermission(existing().ownerId)
+        && isRecordCreator(existing());
+    }
+
+    // 7E. Projects (Proje Yönetimi - Admin tarafından yetkilendirilen kişiler görür; işlem yetkisi sadece ilgili proje yöneticisindedir)
+    match /projects/{projectId} {
+      allow get: if isVerified() && isValidId(projectId) && hasProjectsViewPermission(existing().ownerId);
+      allow list: if isVerified() && canQueryProjectsScreen() && (
+        resource.data.ownerId == request.auth.uid
+        || isActiveMemberOf(resource.data.ownerId)
+        || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+      );
+      allow create: if isVerified() && isValidId(projectId)
+        && isValidProject(incoming())
+        && hasValidCreatorOnCreate(incoming())
+        && (incoming().tenderId == '' || canReadTender(incoming().tenderId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && hasProjectsViewPermission(incoming().ownerId)
+        && (
+          isWorkspaceAdmin(incoming().ownerId)
+          || incoming().managerUid == request.auth.uid
+        );
+      allow update: if isVerified() && isValidId(projectId)
+        && isValidProject(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && preservesCreatorOnUpdate(incoming(), existing())
+        && incoming().updatedAt == request.time
+        && (incoming().tenderId == '' || canReadTender(incoming().tenderId))
+        && (
+          (
+            isWorkspaceAdmin(existing().ownerId)
+            && (
+              incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
+              || incoming().diff(existing()).affectedKeys().hasOnly(['managerUid', 'managerEmail', 'managerName', 'updatedAt'])
+            )
+          )
+          || (
+            hasProjectsViewPermission(existing().ownerId)
+            && existing().managerUid == request.auth.uid
+            && incoming().managerUid == existing().managerUid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'projectCode', 'tenderId', 'tenderTrackingCode', 'quoteId', 'quoteNumber', 'title', 'authority',
+              'contractAmount', 'currency', 'startDate', 'endDate', 'status',
+              'notes', 'memberIds', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerified() && isValidId(projectId)
+        && hasProjectsViewPermission(existing().ownerId)
+        && existing().managerUid == request.auth.uid
+        && isRecordCreator(existing());
+    }
+
+    // 7F. Project Transactions (Gelen Faturalar, Kesilen Faturalar, Proje Giderleri)
+    match /projectTransactions/{txId} {
+      allow get: if isVerified() && isValidId(txId) && hasProjectsViewPermission(existing().ownerId);
+      allow list: if isVerified() && canQueryProjectsScreen() && (
+        resource.data.ownerId == request.auth.uid
+        || isActiveMemberOf(resource.data.ownerId)
+        || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+      );
+      allow create: if isVerified() && isValidId(txId)
+        && isValidProjectTransaction(incoming())
+        && hasValidCreatorOnCreate(incoming())
+        && (incoming().tenderId == '' || canReadTender(incoming().tenderId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && hasProjectsViewPermission(incoming().ownerId)
+        && isProjectManager(incoming().projectId);
+      allow update: if isVerified() && isValidId(txId)
+        && isValidProjectTransaction(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().projectId == existing().projectId
+        && incoming().createdAt == existing().createdAt
+        && preservesCreatorOnUpdate(incoming(), existing())
+        && incoming().updatedAt == request.time
+        && (incoming().tenderId == '' || canReadTender(incoming().tenderId))
+        && (
+          (
+            isWorkspaceAdmin(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
+          )
+          || (
+            hasProjectsViewPermission(existing().ownerId)
+            && isProjectManager(existing().projectId)
+            && (
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'paymentStatus', 'paidAmount', 'paymentMethod', 'updatedAt'
+              ])
+              || incoming().diff(existing()).affectedKeys().hasOnly([
+                'projectCode', 'projectTitle', 'tenderId', 'tenderTrackingCode',
+                'txType', 'category', 'companyId', 'companyName', 'invoiceNo', 'title',
+                'vatRate', 'subtotalAmount', 'vatAmount', 'totalAmount', 'paidAmount',
+                'currency', 'txDate', 'dueDate', 'paymentMethod', 'paymentStatus',
+                'notes', 'memberIds', 'updatedAt'
+              ])
+            )
+          )
+        );
+        allow delete: if isVerified() && isValidId(txId)
+        && hasProjectsViewPermission(existing().ownerId)
+        && isProjectManager(existing().projectId)
+        && isRecordCreator(existing());
+    }
+
+    // 7G. Sales Quotes & Proforma Invoices (Özel Sektör Teklif ve Proforma)
+    match /salesQuotes/{quoteId} {
+      allow get: if isVerified() && isValidId(quoteId) && isActiveMemberOf(existing().ownerId);
+      allow list: if isVerified() && (
+        resource.data.ownerId == request.auth.uid
+        || isActiveMemberOf(resource.data.ownerId)
+        || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+      );
+      allow create: if isVerified() && isValidId(quoteId)
+        && isValidSalesQuote(incoming())
+        && hasValidCreatorOnCreate(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && hasQuotesPermission(incoming().ownerId);
+      allow update: if isVerified() && isValidId(quoteId)
+        && isValidSalesQuote(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && preservesCreatorOnUpdate(incoming(), existing())
+        && incoming().updatedAt == request.time
+        && (
+          (
+            isWorkspaceAdmin(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
+          )
+          || (
+            hasProjectsViewPermission(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'orderConfirmedDate', 'linkedProjectId', 'linkedProjectCode', 'updatedAt'
+            ])
+          )
+          || (
+            hasQuotesPermission(existing().ownerId)
+            && (
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'orderConfirmedDate', 'linkedProjectId', 'linkedProjectCode', 'updatedAt'
+              ])
+              || incoming().diff(existing()).affectedKeys().hasOnly([
+                'quoteNumber', 'docType', 'status', 'customerId', 'customerName',
+                'customerTaxOffice', 'customerTaxNumber', 'customerContactPerson', 'customerPhone',
+                'customerEmail', 'customerAddress', 'title', 'issueDate', 'validUntilDate',
+                'currency', 'exchangeNote', 'deliveryTerms', 'paymentTerms', 'warrantyTerms',
+                'bankInfo', 'notes', 'items', 'subtotalAmount', 'discountTotal', 'vatTotal',
+                'grandTotal', 'linkedProjectId', 'linkedProjectCode', 'orderConfirmedDate',
+                'memberIds', 'updatedAt'
+              ])
+            )
+          )
+        );
+      allow delete: if isVerified() && isValidId(quoteId)
+        && hasQuotesPermission(existing().ownerId)
+        && isRecordCreator(existing());
+    }
+
+    // 7H. Tender Pricing Sheets (İhale Operasyonu Fiyat Çalışması)
+    match /tenderPricingSheets/{sheetId} {
+      allow get: if isVerified() && isValidId(sheetId) && (resource == null || isActiveMemberOf(existing().ownerId));
+      allow list: if isVerified() && (
+        resource.data.ownerId == request.auth.uid
+        || isActiveMemberOf(resource.data.ownerId)
+        || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+      );
+      allow create: if isVerified() && isValidId(sheetId)
+        && isValidTenderPricingSheet(incoming())
+        && hasValidCreatorOnCreate(incoming())
+        && canReadTender(incoming().tenderId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && hasPricingPermission(incoming().ownerId);
+      allow update: if isVerified() && isValidId(sheetId)
+        && isValidTenderPricingSheet(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().tenderId == existing().tenderId
+        && incoming().createdAt == existing().createdAt
+        && preservesCreatorOnUpdate(incoming(), existing())
+        && incoming().updatedAt == request.time
+        && (
+          (
+            isWorkspaceAdmin(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
+          )
+          || (
+            hasPricingPermission(existing().ownerId)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'tenderTrackingCode', 'tenderTitle', 'currency',
+              'annualFinancingRate', 'defaultDeliveryDays', 'vatFinancingBasis', 'notes',
+              'items', 'totalCost', 'totalProfit', 'totalDeliveryFinancing', 'totalTaxes',
+              'totalShipping', 'totalVatFinancing', 'totalBidNet', 'totalVat', 'totalBidGross',
+              'memberIds', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerified() && isValidId(sheetId)
+        && hasPricingPermission(existing().ownerId)
+        && isRecordCreator(existing());
+    }
+
+    // 8. Recycle Bin (Geri Dönüşüm Kutusu)
+    match /recycleBin/{trashId} {
+      allow get: if isVerified() && isValidId(trashId) && isActiveMemberOf(existing().ownerId);
+      allow list: if isVerified() && (
+        resource.data.ownerId == request.auth.uid
+        || isActiveMemberOf(resource.data.ownerId)
+        || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+      );
+      allow create: if isVerified() && isValidId(trashId)
+        && isValidRecycleBinItem(incoming())
+        && incoming().deletedAt == request.time
+        && incoming().deletedBy == request.auth.uid
+        && incoming().deletedByEmail.lower() == request.auth.token.email.lower()
+        && incoming().createdBy == request.auth.uid
+        && isActiveMemberOf(incoming().ownerId)
+        && (
+          (incoming().entityType == 'tender' && hasWorkspacePermission(incoming().ownerId, 'canDeleteTender'))
+          || (incoming().entityType == 'tender_document' && (hasWorkspacePermission(incoming().ownerId, 'canManageVault') || hasWorkspacePermission(incoming().ownerId, 'canDeleteTender')))
+          || (incoming().entityType == 'company_vault' && hasWorkspacePermission(incoming().ownerId, 'canManageVault'))
+          || (incoming().entityType == 'bid_product' && hasWorkspacePermission(incoming().ownerId, 'canManageProducts'))
+          || (incoming().entityType == 'accounting_company' && hasAccountingPermission(incoming().ownerId))
+          || (incoming().entityType == 'accounting_entry' && hasAccountingPermission(incoming().ownerId))
+          || (incoming().entityType == 'accounting_cheque' && hasAccountingPermission(incoming().ownerId))
+          || (incoming().entityType == 'sales_quote' && hasQuotesPermission(incoming().ownerId))
+          || (incoming().entityType == 'project' && exists(/databases/$(database)/documents/projects/$(incoming().originalId)) && get(/databases/$(database)/documents/projects/$(incoming().originalId)).data.managerUid == request.auth.uid)
+          || (incoming().entityType == 'project_transaction' && exists(/databases/$(database)/documents/projectTransactions/$(incoming().originalId)) && isProjectManager(get(/databases/$(database)/documents/projectTransactions/$(incoming().originalId)).data.projectId))
+        );
+      allow update: if isVerified() && isValidId(trashId)
+        && isValidRecycleBinItem(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().deletedBy == existing().deletedBy
+        && incoming().deletedAt == existing().deletedAt
+        && isWorkspaceAdmin(existing().ownerId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds']);
+      allow delete: if isVerified() && isValidId(trashId)
+        && isActiveMemberOf(existing().ownerId)
+        && existing().deletedBy == request.auth.uid;
+
+      match /chunks/{chunkId} {
+        allow get: if isVerified() && isValidId(trashId) && isValidId(chunkId)
+          && isActiveMemberOf(existing().ownerId)
+          && exists(/databases/$(database)/documents/recycleBin/$(trashId));
+        allow list: if isVerified() && (
+          resource.data.ownerId == request.auth.uid
+          || isActiveMemberOf(resource.data.ownerId)
+          || ('memberIds' in resource.data && resource.data.memberIds is list && resource.data.memberIds.size() <= 50 && request.auth.uid in resource.data.memberIds)
+        );
+        allow create: if isVerified() && isValidId(trashId) && isValidId(chunkId)
+          && isValidChunk(incoming(), trashId)
+          && hasValidCreatorOnCreate(incoming())
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/recycleBin/$(trashId))
+          && get(/databases/$(database)/documents/recycleBin/$(trashId)).data.deletedBy == request.auth.uid;
+        allow update: if isVerified() && isValidId(trashId) && isValidId(chunkId)
+          && isValidChunk(incoming(), trashId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().docId == existing().docId
+          && incoming().index == existing().index
+          && incoming().data == existing().data
+          && incoming().createdAt == existing().createdAt
+          && preservesCreatorOnUpdate(incoming(), existing())
+          && isWorkspaceAdmin(existing().ownerId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(['memberIds']);
+        allow delete: if isVerified() && isValidId(trashId) && isValidId(chunkId)
+          && isActiveMemberOf(existing().ownerId)
+          && isRecordCreator(existing());
+      }
+    }
+  }
+}

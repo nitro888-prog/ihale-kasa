@@ -1,0 +1,35 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Yerel ve geçici dosyalar
+.aistudio/
+.aistudio.zip
+node_modules/
+dist/
+disteski/
+tmp/
+*.zip
+
+# Yedek dosyalar
+*.backup-*
+*.onceki
+*.yedek
+
+# Gizli yapılandırmalar
+firebase-applet-config.json
+
+# Kesinlikle GitHub'a gönderilmeyecekler
+node_modules
+*.zip
+tmp/
+disteski/
+*.backup-*
+*.onceki
+*.yedek
+firebase-applet-config.json
