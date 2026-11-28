@@ -71,30 +71,32 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
 
   const activeUsers = useMemo(() => {
     const actives = workspaceUsers.filter((u) => u.status === 'active');
-    if (actives.length > 0) return actives;
-    return [
-      {
-        uid: currentUid,
-        email: currentEmail,
-        displayName: currentDisplayName || currentEmail,
-        department: '',
-        role: isAdmin ? 'admin' : 'ihale_sorumlusu',
-        status: 'active',
-        workspaceOwnerId: currentUid,
-        inviteId: '',
-        permissions: {
-          canCreateTender: true,
-          canEditTender: true,
-          canDeleteTender: false,
-          canManageVault: false,
-          canManageProducts: false,
-          canAnalyzeDocuments: false,
-          canManageSettings: false,
-          canViewProjects: true,
-        },
-        approvedBy: currentUid,
-      } as UserAuthorization,
-    ];
+    const hasCurrent = Boolean(currentUid) && actives.some((u) => u.uid === currentUid);
+    if (actives.length > 0 && (hasCurrent || !currentUid)) {
+      return actives;
+    }
+    const selfFallback = {
+      uid: currentUid,
+      email: currentEmail,
+      displayName: currentDisplayName || currentEmail,
+      department: '',
+      role: isAdmin ? 'admin' : 'ihale_sorumlusu',
+      status: 'active',
+      workspaceOwnerId: currentUid,
+      inviteId: '',
+      permissions: {
+        canCreateTender: true,
+        canEditTender: true,
+        canDeleteTender: false,
+        canManageVault: false,
+        canManageProducts: false,
+        canAnalyzeDocuments: false,
+        canManageSettings: false,
+        canViewProjects: true,
+      },
+      approvedBy: currentUid,
+    } as UserAuthorization;
+    return currentUid ? [selfFallback, ...actives] : actives;
   }, [workspaceUsers, currentUid, currentEmail, currentDisplayName, isAdmin]);
 
   const wonTenders = useMemo(() => {
@@ -333,7 +335,41 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
       );
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Proje kaydedilemedi.');
+      const rawMsg = err instanceof Error ? err.message : 'Proje kaydedilemedi.';
+      let parsedInfo: {
+        error?: string;
+        operationType?: string;
+        path?: string | null;
+      } | null = null;
+      try {
+        if (rawMsg.startsWith('{')) {
+          parsedInfo = JSON.parse(rawMsg);
+        }
+      } catch {
+        parsedInfo = null;
+      }
+      console.error('[ProjectFormModal] Proje kaydetme hatası:', {
+        isEdit: Boolean(editingProject),
+        currentUid,
+        tenderId: linkedTender?.id || '',
+        quoteId: linkedQuote?.id || '',
+        selectedManagerUids,
+        details: parsedInfo || rawMsg,
+      });
+      const underlyingMsg = parsedInfo?.error || rawMsg;
+      if (
+        underlyingMsg.includes('Missing or insufficient permissions') ||
+        underlyingMsg.includes('permission-denied')
+      ) {
+        const locationHint = parsedInfo?.path
+          ? ` (İşlem: ${parsedInfo.operationType || (editingProject ? 'update' : 'create')} · Yol: ${parsedInfo.path})`
+          : '';
+        setError(
+          `Proje kaydetme için Firestore yetkisi reddedildi. Lütfen oturumunuzu ve proje izinlerinizi kontrol edin.${locationHint}`
+        );
+      } else {
+        setError(underlyingMsg);
+      }
     } finally {
       setSaving(false);
     }

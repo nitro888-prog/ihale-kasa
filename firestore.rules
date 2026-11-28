@@ -32,7 +32,10 @@ service cloud.firestore {
     }
 
     function isBootstrapAdmin() {
-      return isVerified() && request.auth.token.email.lower() == 'nitro888@gmail.com';
+      return isVerified()
+        && 'email' in request.auth.token
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() == 'nitro888@gmail.com';
     }
 
     function hasUserRecord() {
@@ -69,7 +72,10 @@ service cloud.firestore {
         || (
           hasUserRecord()
           && currentUserData().status == 'active'
-          && currentUserData().workspaceOwnerId == workspaceOwnerId
+          && (
+            currentUserData().workspaceOwnerId == workspaceOwnerId
+            || (currentUserData().workspaceOwnerId == '' && request.auth.uid == workspaceOwnerId)
+          )
         )
       );
     }
@@ -203,7 +209,12 @@ service cloud.firestore {
       return ('createdBy' in data)
         && ('createdByEmail' in data)
         && ('createdByName' in data)
+        && data.createdBy is string
+        && data.createdByEmail is string
+        && data.createdByName is string
         && data.createdBy == request.auth.uid
+        && 'email' in request.auth.token
+        && request.auth.token.email is string
         && data.createdByEmail.lower() == request.auth.token.email.lower();
     }
 
@@ -803,7 +814,18 @@ service cloud.firestore {
 
     function canReadTender(tenderId) {
       return exists(/databases/$(database)/documents/tenders/$(tenderId))
-        && isActiveMemberOf(get(/databases/$(database)/documents/tenders/$(tenderId)).data.ownerId);
+        && (
+          isWorkspaceAdmin(get(/databases/$(database)/documents/tenders/$(tenderId)).data.ownerId)
+          || isActiveMemberOf(get(/databases/$(database)/documents/tenders/$(tenderId)).data.ownerId)
+          || (
+            hasUserRecord()
+            && currentUserData().status == 'active'
+            && 'memberIds' in get(/databases/$(database)/documents/tenders/$(tenderId)).data
+            && get(/databases/$(database)/documents/tenders/$(tenderId)).data.memberIds is list
+            && get(/databases/$(database)/documents/tenders/$(tenderId)).data.memberIds.size() <= 50
+            && request.auth.uid in get(/databases/$(database)/documents/tenders/$(tenderId)).data.memberIds
+          )
+        );
     }
 
     function canManageTenderVault(tenderId) {

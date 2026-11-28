@@ -770,7 +770,7 @@ export default function App() {
 
   const actor: ActorIdentity = {
     uid: user.uid,
-    email: (userAuth.email || user.email || '').toLowerCase(),
+    email: (user.email || userAuth.email || '').toLowerCase(),
     displayName: userAuth.displayName || user.displayName || user.email || 'Kullanıcı',
   };
 

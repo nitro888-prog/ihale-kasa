@@ -97,11 +97,12 @@ export function buildMemberIds(
   extraMemberIds?: string[]
 ): string[] {
   const set = new Set<string>();
-  if (workspaceOwnerId) set.add(workspaceOwnerId);
-  if (auth.currentUser?.uid) set.add(auth.currentUser.uid);
+  const validIdRegex = /^[a-zA-Z0-9_-]+$/;
+  if (workspaceOwnerId && validIdRegex.test(workspaceOwnerId)) set.add(workspaceOwnerId);
+  if (auth.currentUser?.uid && validIdRegex.test(auth.currentUser.uid)) set.add(auth.currentUser.uid);
   if (extraMemberIds) {
     for (const id of extraMemberIds) {
-      if (id && typeof id === 'string') set.add(id);
+      if (id && typeof id === 'string' && validIdRegex.test(id)) set.add(id);
     }
   }
   return Array.from(set).slice(0, 50);
@@ -120,9 +121,9 @@ function ownerOrMemberFilter(_currentUid: string, workspaceOwnerId: string) {
 }
 
 function resolveActor(actor?: ActorIdentity): ActorIdentity {
-  const uid = actor?.uid || auth.currentUser?.uid || '';
+  const uid = auth.currentUser?.uid || actor?.uid || '';
   const email = clampString(
-    (actor?.email || auth.currentUser?.email || '').toLowerCase(),
+    (auth.currentUser?.email || actor?.email || '').toLowerCase(),
     SCHEMA_LIMITS.EMAIL_MAX
   );
   const displayName = clampString(
@@ -2540,12 +2541,35 @@ function normalizeProjectManagers(
   };
 }
 
+function normalizeRequiredDateStr(val?: string): string {
+  const trimmed = clampString(val || '', 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : getTodayDateStr();
+}
+
+function normalizeOptionalDateStr(val?: string): string {
+  const trimmed = clampString(val || '', 10);
+  if (!trimmed) return '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : '';
+}
+
 export async function createProject(
   workspaceOwnerId: string,
   input: ProjectInput,
   memberIds?: string[],
   actor?: ActorIdentity
 ): Promise<string> {
+  const currentUser = auth.currentUser;
+  if (!currentUser?.uid) {
+    throw new Error('Proje oluşturmak için aktif oturum gereklidir.');
+  }
+  if (!currentUser.emailVerified) {
+    throw new Error('Proje oluşturmak için doğrulanmış e-posta adresi gereklidir.');
+  }
+  const effectiveOwnerId = clampString(workspaceOwnerId || currentUser.uid, 128);
+  if (!/^[a-zA-Z0-9_-]+$/.test(effectiveOwnerId)) {
+    throw new Error('Geçersiz çalışma alanı sahip kimliği (ownerId).');
+  }
+
   const projectId = makeSafeId('prj');
   const path = `projects/${projectId}`;
   const managerFields = normalizeProjectManagers(input.managers || [], {
@@ -2553,8 +2577,10 @@ export async function createProject(
     email: input.managerEmail,
     displayName: input.managerName,
   });
+  const numericAmount = Number(input.contractAmount);
+  const creatorFields = buildCreatorFields(actor);
   const payload = {
-    ownerId: workspaceOwnerId,
+    ownerId: effectiveOwnerId,
     projectCode:
       clampString(input.projectCode, SCHEMA_LIMITS.PROJECT_CODE_MAX) ||
       `PRJ-${new Date().getFullYear()}`,
@@ -2567,15 +2593,18 @@ export async function createProject(
     quoteNumber: clampString(input.quoteNumber || '', SCHEMA_LIMITS.QUOTE_NUMBER_MAX),
     title: clampString(input.title, SCHEMA_LIMITS.TITLE_MAX) || 'Proje',
     authority: clampString(input.authority, SCHEMA_LIMITS.AUTHORITY_MAX) || 'Kurum',
-    contractAmount: Math.max(0, Number(input.contractAmount) || 0),
+    contractAmount: Number.isFinite(numericAmount) ? Math.max(0, numericAmount) : 0,
     currency: input.currency,
-    startDate: clampString(input.startDate, 10) || getTodayDateStr(),
-    endDate: clampString(input.endDate, 10),
+    startDate: normalizeRequiredDateStr(input.startDate),
+    endDate: normalizeOptionalDateStr(input.endDate),
     status: input.status,
     ...managerFields,
     notes: clampString(input.notes, SCHEMA_LIMITS.NOTES_MAX),
-    memberIds: buildMemberIds(workspaceOwnerId, memberIds),
-    ...buildCreatorFields(actor),
+    memberIds: buildMemberIds(effectiveOwnerId, [
+      ...(memberIds || []),
+      ...managerFields.managerUids,
+    ]),
+    ...creatorFields,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
@@ -2584,6 +2613,20 @@ export async function createProject(
     await setDoc(doc(db, 'projects', projectId), payload);
     return projectId;
   } catch (error) {
+    console.error('[createProject] Firestore create başarısız:', {
+      path,
+      ownerId: effectiveOwnerId,
+      tenderId: payload.tenderId,
+      quoteId: payload.quoteId,
+      managerUid: payload.managerUid,
+      managerUids: payload.managerUids,
+      createdBy: creatorFields.createdBy,
+      createdByEmail: creatorFields.createdByEmail,
+      authUid: currentUser.uid,
+      tokenEmail: currentUser.email,
+      emailVerified: currentUser.emailVerified,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
     handleFirestoreError(error, OperationType.CREATE, path);
   }
 }
@@ -2596,6 +2639,7 @@ export async function updateProject(
   >
 ): Promise<void> {
   const path = `projects/${projectId}`;
+  const numericAmount = Number(input.contractAmount);
   const payload = {
     projectCode:
       clampString(input.projectCode, SCHEMA_LIMITS.PROJECT_CODE_MAX) ||
@@ -2609,10 +2653,10 @@ export async function updateProject(
     quoteNumber: clampString(input.quoteNumber || '', SCHEMA_LIMITS.QUOTE_NUMBER_MAX),
     title: clampString(input.title, SCHEMA_LIMITS.TITLE_MAX) || 'Proje',
     authority: clampString(input.authority, SCHEMA_LIMITS.AUTHORITY_MAX) || 'Kurum',
-    contractAmount: Math.max(0, Number(input.contractAmount) || 0),
+    contractAmount: Number.isFinite(numericAmount) ? Math.max(0, numericAmount) : 0,
     currency: input.currency,
-    startDate: clampString(input.startDate, 10) || getTodayDateStr(),
-    endDate: clampString(input.endDate, 10),
+    startDate: normalizeRequiredDateStr(input.startDate),
+    endDate: normalizeOptionalDateStr(input.endDate),
     status: input.status,
     notes: clampString(input.notes, SCHEMA_LIMITS.NOTES_MAX),
     updatedAt: serverTimestamp(),
@@ -2644,13 +2688,30 @@ export async function reassignProjectManagers(
     updatedAt: serverTimestamp(),
   };
   if (Array.isArray(memberIds) && memberIds.length > 0) {
-    updatePayload.memberIds = Array.from(
-      new Set([...memberIds, ...managerFields.managerUids].filter(Boolean))
+    const cleanMemberIds = Array.from(
+      new Set(
+        [...memberIds, ...managerFields.managerUids]
+          .map((id) => clampString(id, 128))
+          .filter((id) => /^[a-zA-Z0-9_-]+$/.test(id))
+      )
     ).slice(0, 50);
+    if (cleanMemberIds.length > 0) {
+      updatePayload.memberIds = cleanMemberIds;
+    }
   }
   try {
     await updateDoc(doc(db, 'projects', projectId), updatePayload);
   } catch (error) {
+    console.error('[reassignProjectManagers] Firestore update başarısız:', {
+      path,
+      actorUid: currentUser.uid,
+      actorEmail: currentUser.email,
+      emailVerified: currentUser.emailVerified,
+      managerUids: managerFields.managerUids,
+      memberIdsCount: Array.isArray(updatePayload.memberIds)
+        ? updatePayload.memberIds.length
+        : 0,
+    });
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
