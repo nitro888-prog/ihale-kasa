@@ -526,6 +526,8 @@ export interface Project {
   managerUid: string;
   managerEmail: string;
   managerName: string;
+  managerUids?: string[];
+  managers?: ProjectManagerEntry[];
   notes: string;
   memberIds?: string[];
   createdBy?: string;
@@ -533,6 +535,12 @@ export interface Project {
   createdByName?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
+}
+
+export interface ProjectManagerEntry {
+  uid: string;
+  email: string;
+  displayName: string;
 }
 
 export type ProjectTransactionType =
@@ -605,12 +613,104 @@ export function isProjectIncomeTx(txType: ProjectTransactionType): boolean {
   return txType === 'kesilen_fatura' || txType === 'diger_gelir';
 }
 
+export function getProjectManagers(
+  project:
+    | {
+        managerUid?: string;
+        managerEmail?: string;
+        managerName?: string;
+        managerUids?: string[];
+        managers?: ProjectManagerEntry[];
+      }
+    | null
+    | undefined
+): ProjectManagerEntry[] {
+  if (!project) return [];
+  if (Array.isArray(project.managers) && project.managers.length > 0) {
+    const seen = new Set<string>();
+    const list: ProjectManagerEntry[] = [];
+    for (const m of project.managers) {
+      if (m && m.uid && !seen.has(m.uid)) {
+        seen.add(m.uid);
+        list.push({
+          uid: m.uid,
+          email: m.email || '',
+          displayName: m.displayName || m.email || 'Proje Yöneticisi',
+        });
+      }
+    }
+    if (list.length > 0) return list;
+  }
+  if (Array.isArray(project.managerUids) && project.managerUids.length > 0) {
+    const seen = new Set<string>();
+    const list: ProjectManagerEntry[] = [];
+    project.managerUids.forEach((uid, idx) => {
+      if (uid && !seen.has(uid)) {
+        seen.add(uid);
+        list.push({
+          uid,
+          email: idx === 0 ? project.managerEmail || '' : '',
+          displayName:
+            idx === 0
+              ? project.managerName || 'Proje Yöneticisi'
+              : 'Proje Yöneticisi',
+        });
+      }
+    });
+    if (list.length > 0) return list;
+  }
+  if (project.managerUid) {
+    return [
+      {
+        uid: project.managerUid,
+        email: project.managerEmail || '',
+        displayName: project.managerName || 'Proje Yöneticisi',
+      },
+    ];
+  }
+  return [];
+}
+
+export function formatProjectManagerNames(
+  project:
+    | {
+        managerUid?: string;
+        managerEmail?: string;
+        managerName?: string;
+        managerUids?: string[];
+        managers?: ProjectManagerEntry[];
+      }
+    | null
+    | undefined
+): string {
+  const list = getProjectManagers(project);
+  if (list.length === 0) return project?.managerName || 'Proje Yöneticisi';
+  return list.map((m) => m.displayName).join(', ');
+}
+
 export function isProjectManager(
-  project: { managerUid?: string } | null | undefined,
+  project:
+    | {
+        managerUid?: string;
+        managerUids?: string[];
+        managers?: ProjectManagerEntry[];
+      }
+    | null
+    | undefined,
   currentUid: string
 ): boolean {
   if (!project || !currentUid) return false;
-  return Boolean(project.managerUid && project.managerUid === currentUid);
+  if (project.managerUid && project.managerUid === currentUid) return true;
+  if (Array.isArray(project.managerUids) && project.managerUids.includes(currentUid)) {
+    return true;
+  }
+  if (
+    Array.isArray(project.managers) &&
+    project.managers.some((m) => m && m.uid === currentUid)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export interface RecycleBinItem {

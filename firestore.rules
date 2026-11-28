@@ -541,6 +541,38 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidProjectManagerUids(data) {
+      return !('managerUids' in data) || (
+        data.managerUids is list
+        && data.managerUids.size() >= 1
+        && data.managerUids.size() <= 20
+        && data.managerUids[0] is string
+        && data.managerUids[0].size() >= 1
+        && data.managerUids[0].size() <= 128
+        && isValidId(data.managerUids[0])
+      );
+    }
+
+    function isValidProjectManagersList(data) {
+      return !('managers' in data) || (
+        data.managers is list
+        && data.managers.size() >= 1
+        && data.managers.size() <= 20
+        && data.managers[0] is map
+        && data.managers[0].keys().hasAll(['uid', 'email', 'displayName'])
+        && data.managers[0].keys().hasOnly(['uid', 'email', 'displayName'])
+        && data.managers[0].uid is string
+        && data.managers[0].uid.size() >= 1
+        && data.managers[0].uid.size() <= 128
+        && isValidId(data.managers[0].uid)
+        && data.managers[0].email is string
+        && data.managers[0].email.size() <= 120
+        && data.managers[0].displayName is string
+        && data.managers[0].displayName.size() >= 1
+        && data.managers[0].displayName.size() <= 100
+      );
+    }
+
     function isValidProject(data) {
       return data.keys().hasAll([
           'ownerId', 'projectCode', 'tenderId', 'tenderTrackingCode', 'title', 'authority',
@@ -550,7 +582,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'ownerId', 'projectCode', 'tenderId', 'tenderTrackingCode', 'quoteId', 'quoteNumber',
           'title', 'authority', 'contractAmount', 'currency', 'startDate', 'endDate', 'status',
-          'managerUid', 'managerEmail', 'managerName', 'notes', 'memberIds',
+          'managerUid', 'managerEmail', 'managerName', 'managerUids', 'managers', 'notes', 'memberIds',
           'createdBy', 'createdByEmail', 'createdByName', 'createdAt', 'updatedAt'
         ])
         && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && isValidId(data.ownerId)
@@ -569,6 +601,9 @@ service cloud.firestore {
         && data.managerUid is string && data.managerUid.size() >= 1 && data.managerUid.size() <= 128 && isValidId(data.managerUid)
         && data.managerEmail is string && data.managerEmail.size() <= 120
         && data.managerName is string && data.managerName.size() >= 1 && data.managerName.size() <= 100
+        && isValidProjectManagerUids(data)
+        && isValidProjectManagersList(data)
+        && (!('managerUids' in data) || data.managerUid in data.managerUids)
         && data.notes is string && data.notes.size() <= 2000
         && isValidMemberIds(data)
         && isValidOptionalCreatorFields(data)
@@ -777,9 +812,19 @@ service cloud.firestore {
         && hasWorkspacePermission(get(/databases/$(database)/documents/companyVault/$(docId)).data.ownerId, 'canManageVault');
     }
 
+    function isProjectDocManager(projectData) {
+      return projectData.managerUid == request.auth.uid
+        || (
+          'managerUids' in projectData
+          && projectData.managerUids is list
+          && projectData.managerUids.size() <= 20
+          && request.auth.uid in projectData.managerUids
+        );
+    }
+
     function isProjectManager(projectId) {
       return exists(/databases/$(database)/documents/projects/$(projectId))
-        && get(/databases/$(database)/documents/projects/$(projectId)).data.managerUid == request.auth.uid;
+        && isProjectDocManager(get(/databases/$(database)/documents/projects/$(projectId)).data);
     }
 
     // 0A. User Authorizations (RBAC + PII Isolation)
@@ -1386,7 +1431,7 @@ service cloud.firestore {
         && hasProjectsViewPermission(incoming().ownerId)
         && (
           isWorkspaceAdmin(incoming().ownerId)
-          || incoming().managerUid == request.auth.uid
+          || isProjectDocManager(incoming())
         );
       allow update: if isVerified() && isValidId(projectId)
         && isValidProject(incoming())
@@ -1400,13 +1445,15 @@ service cloud.firestore {
             isWorkspaceAdmin(existing().ownerId)
             && (
               incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
-              || incoming().diff(existing()).affectedKeys().hasOnly(['managerUid', 'managerEmail', 'managerName', 'updatedAt'])
+              || incoming().diff(existing()).affectedKeys().hasOnly(['managerUid', 'managerEmail', 'managerName', 'managerUids', 'managers', 'updatedAt'])
             )
           )
           || (
             hasProjectsViewPermission(existing().ownerId)
-            && existing().managerUid == request.auth.uid
+            && isProjectDocManager(existing())
             && incoming().managerUid == existing().managerUid
+            && (!('managerUids' in existing()) ? !('managerUids' in incoming()) : (('managerUids' in incoming()) && incoming().managerUids == existing().managerUids))
+            && (!('managers' in existing()) ? !('managers' in incoming()) : (('managers' in incoming()) && incoming().managers == existing().managers))
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'projectCode', 'tenderId', 'tenderTrackingCode', 'quoteId', 'quoteNumber', 'title', 'authority',
               'contractAmount', 'currency', 'startDate', 'endDate', 'status',
@@ -1416,7 +1463,7 @@ service cloud.firestore {
         );
       allow delete: if isVerified() && isValidId(projectId)
         && hasProjectsViewPermission(existing().ownerId)
-        && existing().managerUid == request.auth.uid
+        && isProjectDocManager(existing())
         && isRecordCreator(existing());
     }
 
@@ -1593,7 +1640,7 @@ service cloud.firestore {
           || (incoming().entityType == 'accounting_entry' && hasAccountingPermission(incoming().ownerId))
           || (incoming().entityType == 'accounting_cheque' && hasAccountingPermission(incoming().ownerId))
           || (incoming().entityType == 'sales_quote' && hasQuotesPermission(incoming().ownerId))
-          || (incoming().entityType == 'project' && exists(/databases/$(database)/documents/projects/$(incoming().originalId)) && get(/databases/$(database)/documents/projects/$(incoming().originalId)).data.managerUid == request.auth.uid)
+          || (incoming().entityType == 'project' && exists(/databases/$(database)/documents/projects/$(incoming().originalId)) && isProjectDocManager(get(/databases/$(database)/documents/projects/$(incoming().originalId)).data))
           || (incoming().entityType == 'project_transaction' && exists(/databases/$(database)/documents/projectTransactions/$(incoming().originalId)) && isProjectManager(get(/databases/$(database)/documents/projectTransactions/$(incoming().originalId)).data.projectId))
         );
       allow update: if isVerified() && isValidId(trashId)

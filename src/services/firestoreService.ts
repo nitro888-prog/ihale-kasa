@@ -47,9 +47,12 @@ import {
   CompanyVaultDocument,
   CurrencyCode,
   DEFAULT_CHECKLIST,
+  formatProjectManagerNames,
   FULL_PERMISSIONS,
   isOwnRecord,
+  isProjectManager,
   Project,
+  ProjectManagerEntry,
   ProjectStatus,
   ProjectTransaction,
   ProjectTransactionType,
@@ -2455,6 +2458,64 @@ export function subscribeProjects(
   );
 }
 
+function buildProjectManagerSummaryName(managers: ProjectManagerEntry[]): string {
+  const names = managers
+    .map((m) => clampString(m.displayName || m.email, SCHEMA_LIMITS.PERSON_MAX))
+    .filter(Boolean);
+  if (names.length === 0) return 'Proje Yöneticisi';
+  if (names.length === 1) return names[0];
+  const joined = names.join(', ');
+  if (joined.length <= SCHEMA_LIMITS.PERSON_MAX) return joined;
+  return clampString(
+    `${names[0]} (+${names.length - 1} yönetici)`,
+    SCHEMA_LIMITS.PERSON_MAX
+  );
+}
+
+function normalizeProjectManagers(
+  managers: ProjectManagerEntry[],
+  fallback?: { uid: string; email: string; displayName: string }
+): {
+  managerUid: string;
+  managerEmail: string;
+  managerName: string;
+  managerUids: string[];
+  managers: ProjectManagerEntry[];
+} {
+  const seen = new Set<string>();
+  const list: ProjectManagerEntry[] = [];
+  for (const m of managers) {
+    const uid = clampString(m?.uid || '', 128);
+    if (!uid || seen.has(uid)) continue;
+    seen.add(uid);
+    const email = clampString((m?.email || '').toLowerCase(), SCHEMA_LIMITS.EMAIL_MAX);
+    const displayName =
+      clampString(m?.displayName || email, SCHEMA_LIMITS.PERSON_MAX) ||
+      'Proje Yöneticisi';
+    list.push({ uid, email, displayName });
+    if (list.length >= 20) break;
+  }
+  if (list.length === 0 && fallback?.uid) {
+    const uid = clampString(fallback.uid, 128);
+    const email = clampString((fallback.email || '').toLowerCase(), SCHEMA_LIMITS.EMAIL_MAX);
+    const displayName =
+      clampString(fallback.displayName || email, SCHEMA_LIMITS.PERSON_MAX) ||
+      'Proje Yöneticisi';
+    list.push({ uid, email, displayName });
+  }
+  if (list.length === 0) {
+    throw new Error('En az bir proje yöneticisi seçilmelidir.');
+  }
+  const primary = list[0];
+  return {
+    managerUid: primary.uid,
+    managerEmail: primary.email,
+    managerName: buildProjectManagerSummaryName(list),
+    managerUids: list.map((m) => m.uid),
+    managers: list,
+  };
+}
+
 export async function createProject(
   workspaceOwnerId: string,
   input: ProjectInput,
@@ -2463,6 +2524,11 @@ export async function createProject(
 ): Promise<string> {
   const projectId = makeSafeId('prj');
   const path = `projects/${projectId}`;
+  const managerFields = normalizeProjectManagers(input.managers || [], {
+    uid: input.managerUid,
+    email: input.managerEmail,
+    displayName: input.managerName,
+  });
   const payload = {
     ownerId: workspaceOwnerId,
     projectCode:
@@ -2482,9 +2548,7 @@ export async function createProject(
     startDate: clampString(input.startDate, 10) || getTodayDateStr(),
     endDate: clampString(input.endDate, 10),
     status: input.status,
-    managerUid: clampString(input.managerUid, 128),
-    managerEmail: clampString((input.managerEmail || '').toLowerCase(), SCHEMA_LIMITS.EMAIL_MAX),
-    managerName: clampString(input.managerName, SCHEMA_LIMITS.PERSON_MAX) || 'Proje Yöneticisi',
+    ...managerFields,
     notes: clampString(input.notes, SCHEMA_LIMITS.NOTES_MAX),
     memberIds: buildMemberIds(workspaceOwnerId, memberIds),
     ...buildCreatorFields(actor),
@@ -2502,7 +2566,10 @@ export async function createProject(
 
 export async function updateProject(
   projectId: string,
-  input: Omit<ProjectInput, 'managerUid' | 'managerEmail' | 'managerName'>
+  input: Omit<
+    ProjectInput,
+    'managerUid' | 'managerEmail' | 'managerName' | 'managerUids' | 'managers'
+  >
 ): Promise<void> {
   const path = `projects/${projectId}`;
   const payload = {
@@ -2534,21 +2601,27 @@ export async function updateProject(
   }
 }
 
-export async function reassignProjectManager(
+export async function reassignProjectManagers(
   projectId: string,
-  manager: { uid: string; email: string; displayName: string }
+  managers: ProjectManagerEntry[]
 ): Promise<void> {
   const path = `projects/${projectId}`;
+  const managerFields = normalizeProjectManagers(managers);
   try {
     await updateDoc(doc(db, 'projects', projectId), {
-      managerUid: clampString(manager.uid, 128),
-      managerEmail: clampString((manager.email || '').toLowerCase(), SCHEMA_LIMITS.EMAIL_MAX),
-      managerName: clampString(manager.displayName, SCHEMA_LIMITS.PERSON_MAX) || 'Proje Yöneticisi',
+      ...managerFields,
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
+}
+
+export async function reassignProjectManager(
+  projectId: string,
+  manager: { uid: string; email: string; displayName: string }
+): Promise<void> {
+  return reassignProjectManagers(projectId, [manager]);
 }
 
 export async function deleteProject(
@@ -2560,7 +2633,7 @@ export async function deleteProject(
     memberIds?: string[];
   }
 ): Promise<void> {
-  if (project.managerUid !== currentUid) {
+  if (!isProjectManager(project, currentUid)) {
     throw new Error('Bu projeyi yalnızca atanmış proje yöneticisi silebilir.');
   }
   if (!isOwnRecord(project, currentUid)) {
@@ -2607,7 +2680,7 @@ export async function deleteProject(
       parentTenderCode: clampString(project.tenderTrackingCode || project.projectCode, 64),
       title: clampString(project.title, 200) || 'Proje Kaydı',
       subtitle: clampString(
-        `${project.projectCode} · Yönetici: ${project.managerName}`,
+        `${project.projectCode} · Yönetici: ${formatProjectManagerNames(project)}`,
         200
       ),
       createdBy: actor.uid,
@@ -2633,6 +2706,14 @@ export async function deleteProject(
         managerUid: project.managerUid,
         managerEmail: project.managerEmail || '',
         managerName: project.managerName,
+        managerUids: project.managerUids || [project.managerUid],
+        managers: project.managers || [
+          {
+            uid: project.managerUid,
+            email: project.managerEmail || '',
+            displayName: project.managerName,
+          },
+        ],
         notes: project.notes || '',
       },
       chunkCount: 0,
@@ -2824,7 +2905,7 @@ export async function deleteProjectTransaction(
     memberIds?: string[];
   }
 ): Promise<void> {
-  if (project.managerUid !== currentUid) {
+  if (!isProjectManager(project, currentUid)) {
     throw new Error('Bu projenin işlemlerini yalnızca atanmış proje yöneticisi silebilir.');
   }
   if (!isOwnRecord(tx, currentUid)) {
@@ -3789,9 +3870,14 @@ export async function restoreRecycleBinItem(
         startDate: String(p.startDate || getTodayDateStr()),
         endDate: clampString(String(p.endDate || ''), 10),
         status: (p.status as ProjectStatus) || 'aktif',
-        managerUid: String(p.managerUid || currentUid),
-        managerEmail: clampString(String(p.managerEmail || resolvedActor.email), SCHEMA_LIMITS.EMAIL_MAX),
-        managerName: clampString(String(p.managerName || resolvedActor.displayName), SCHEMA_LIMITS.PERSON_MAX) || 'Proje Yöneticisi',
+        ...normalizeProjectManagers(
+          Array.isArray(p.managers) ? (p.managers as ProjectManagerEntry[]) : [],
+          {
+            uid: String(p.managerUid || currentUid),
+            email: String(p.managerEmail || resolvedActor.email),
+            displayName: String(p.managerName || resolvedActor.displayName),
+          }
+        ),
         notes: clampString(String(p.notes || ''), SCHEMA_LIMITS.NOTES_MAX),
         memberIds: members,
         ...creatorFields,

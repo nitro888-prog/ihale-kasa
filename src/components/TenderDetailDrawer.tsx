@@ -32,6 +32,7 @@ import {
   List,
   Briefcase,
   Percent,
+  Printer,
 } from 'lucide-react';
 import {
   ActorIdentity,
@@ -75,7 +76,14 @@ import {
   lookupRecommendationPrices,
   ProductAnalysisResult,
 } from '../lib/productPriceMatcher';
-import { downloadProductAnalysisPdf } from '../lib/productAnalysisPdf';
+import {
+  downloadProductAnalysisPdf,
+  printProductAnalysis,
+} from '../lib/productAnalysisPdf';
+import {
+  downloadTenderNotesAndSummaryPdf,
+  printTenderNotesAndSummary,
+} from '../lib/tenderSummaryPdf';
 import { getAuthBearerHeaders } from '../lib/firebase';
 import { PreviewTarget } from './DocumentPreviewModal';
 import { BidProductCard } from './BidProductCard';
@@ -249,10 +257,13 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
   const [inspectingDb, setInspectingDb] = useState(false);
   const [dbInspectError, setDbInspectError] = useState<string | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [printingDoc, setPrintingDoc] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [notesPdfError, setNotesPdfError] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const [productViewMode, setProductViewMode] = useState<'cards' | 'list'>('cards');
   const [activeProductSavedNote, setActiveProductSavedNote] = useState<string | null>(null);
+  const [activeSummarySavedNote, setActiveSummarySavedNote] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const analysisFileInputRef = useRef<HTMLInputElement>(null);
   const userSelectedTabRef = useRef(false);
@@ -286,6 +297,7 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
     setAnalysisResult(null);
     setProductAnalysisResult(null);
     setActiveProductSavedNote(null);
+    setActiveSummarySavedNote(null);
     setSavedAnalyses([]);
     setLoadingSavedAnalyses(false);
     setSavedAnalysisError(null);
@@ -293,6 +305,7 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
     setFetchedDbProducts(null);
     setDbInspectError(null);
     setPdfError(null);
+    setNotesPdfError(null);
     userSelectedTabRef.current = false;
     hasHydratedProductRef.current = false;
     hasHydratedSummaryRef.current = false;
@@ -331,6 +344,7 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
         if (latestSummary && !hasHydratedSummaryRef.current) {
           hasHydratedSummaryRef.current = true;
           setAnalysisResult(normalizeDocumentAnalysisResult(latestSummary.result));
+          setActiveSummarySavedNote('İhale kaydında saklı son özet analizi');
         }
 
         if (!userSelectedTabRef.current && latestProducts) {
@@ -456,6 +470,110 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
       );
     } finally {
       setExportingPdf(false);
+    }
+  };
+
+  const handlePrintProductAnalysis = async (
+    analysisOverride?: ProductAnalysisResult,
+    preferenceOverride?: string
+  ) => {
+    const targetAnalysis = analysisOverride || productAnalysisResult;
+    if (!targetAnalysis) return;
+    setPrintingDoc(true);
+    setPdfError(null);
+    try {
+      await printProductAnalysis({
+        tender,
+        companyName,
+        preferenceNote: preferenceOverride ?? preferenceNote,
+        analysis: targetAnalysis,
+        dbProducts: effectiveDbProducts,
+      });
+    } catch (err) {
+      setPdfError(
+        err instanceof Error ? err.message : 'Yazdırma görünümü hazırlanamadı.'
+      );
+    } finally {
+      setPrintingDoc(false);
+    }
+  };
+
+  const handleDownloadSummaryOrNotesPdf = async (options?: {
+    analysisOverride?: DocumentAnalysisResult | null;
+    includeNotes?: boolean;
+    titleOverride?: string;
+    fromNotesSection?: boolean;
+  }) => {
+    const targetAnalysis =
+      options?.analysisOverride !== undefined
+        ? options.analysisOverride
+        : analysisResult;
+    const includeNotes = options?.includeNotes ?? false;
+    if (!targetAnalysis && !(includeNotes && tender.notes)) return;
+
+    setExportingPdf(true);
+    if (options?.fromNotesSection) {
+      setNotesPdfError(null);
+    } else {
+      setPdfError(null);
+    }
+    try {
+      await downloadTenderNotesAndSummaryPdf({
+        tender,
+        companyName,
+        analysis: targetAnalysis,
+        includeNotes,
+        titleOverride: options?.titleOverride,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'PDF dosyası oluşturulamadı.';
+      if (options?.fromNotesSection) {
+        setNotesPdfError(msg);
+      } else {
+        setPdfError(msg);
+      }
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
+  const handlePrintSummaryOrNotes = async (options?: {
+    analysisOverride?: DocumentAnalysisResult | null;
+    includeNotes?: boolean;
+    titleOverride?: string;
+    fromNotesSection?: boolean;
+  }) => {
+    const targetAnalysis =
+      options?.analysisOverride !== undefined
+        ? options.analysisOverride
+        : analysisResult;
+    const includeNotes = options?.includeNotes ?? false;
+    if (!targetAnalysis && !(includeNotes && tender.notes)) return;
+
+    setPrintingDoc(true);
+    if (options?.fromNotesSection) {
+      setNotesPdfError(null);
+    } else {
+      setPdfError(null);
+    }
+    try {
+      await printTenderNotesAndSummary({
+        tender,
+        companyName,
+        analysis: targetAnalysis,
+        includeNotes,
+        titleOverride: options?.titleOverride,
+      });
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Yazdırma görünümü hazırlanamadı.';
+      if (options?.fromNotesSection) {
+        setNotesPdfError(msg);
+      } else {
+        setPdfError(msg);
+      }
+    } finally {
+      setPrintingDoc(false);
     }
   };
 
@@ -599,6 +717,7 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
       } else {
         hasHydratedSummaryRef.current = true;
         setAnalysisResult(normalizedForStore as DocumentAnalysisResult);
+        setActiveSummarySavedNote('Ekrana kaydedildi');
       }
 
       // Başarılı analiz sonucunu Firestore arşivine kaydet.
@@ -840,6 +959,7 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
     } else {
       hasHydratedSummaryRef.current = true;
       setAnalysisResult(normalizeDocumentAnalysisResult(analysis.result));
+      setActiveSummarySavedNote('Kayıtlı analiz arşivinden yüklendi');
     }
   };
 
@@ -1072,12 +1192,66 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
             )}
           </div>
 
-          {tender.notes && (
-            <div className="pb-6 border-b border-[#DCE3EC]">
-              <h3 className="text-xs font-semibold text-[#4E5D6C] mb-1.5">İhale Notları</h3>
-              <p className="text-sm text-[#0B2239] whitespace-pre-wrap leading-relaxed">
-                {tender.notes}
-              </p>
+          {(tender.notes || analysisResult) && (
+            <div className="pb-6 border-b border-[#DCE3EC] space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold text-[#4E5D6C]">
+                  İhale Notları
+                </h3>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={exportingPdf}
+                    onClick={() =>
+                      handleDownloadSummaryOrNotesPdf({
+                        analysisOverride: analysisResult,
+                        includeNotes: true,
+                        fromNotesSection: true,
+                      })
+                    }
+                    className="min-h-[34px] px-3 inline-flex items-center gap-1.5 bg-[#0B2239] hover:bg-[#143252] text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 transition-colors"
+                  >
+                    {exportingPdf ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FBBF24]" />
+                    ) : (
+                      <FileDown className="w-3.5 h-3.5 text-[#FBBF24]" />
+                    )}
+                    <span>PDF Olarak İndir</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={printingDoc}
+                    onClick={() =>
+                      handlePrintSummaryOrNotes({
+                        analysisOverride: analysisResult,
+                        includeNotes: true,
+                        fromNotesSection: true,
+                      })
+                    }
+                    className="min-h-[34px] px-3 inline-flex items-center gap-1.5 bg-white border border-[#DCE3EC] hover:bg-[#F3F6FA] text-[#0B2239] text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 transition-colors"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-[#0066B3]" />
+                    <span>Yazdır</span>
+                  </button>
+                </div>
+              </div>
+              {notesPdfError && (
+                <div
+                  role="alert"
+                  className="p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 font-medium"
+                >
+                  {notesPdfError}
+                </div>
+              )}
+              {tender.notes ? (
+                <p className="text-sm text-[#0B2239] whitespace-pre-wrap leading-relaxed">
+                  {tender.notes}
+                </p>
+              ) : (
+                <p className="text-xs text-[#4E5D6C]">
+                  Henüz metin notu girilmedi; kayıtlı yapay zeka şartname özeti ve kritik tarihler PDF olarak indirilebilir veya yazdırılabilir.
+                </p>
+              )}
             </div>
           )}
 
@@ -1307,7 +1481,10 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
           </div>
 
           {/* Gemini Doküman Metni Analizi ve Marka/Model Önerisi */}
-          {permissions.canAnalyzeDocuments && (
+          {(permissions.canAnalyzeDocuments ||
+            savedAnalyses.length > 0 ||
+            Boolean(analysisResult) ||
+            Boolean(productAnalysisResult)) && (
             <div className="pt-6 border-t border-[#DCE3EC] space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
@@ -1410,22 +1587,48 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
                             )}
                           </div>
                           <div className="flex flex-wrap items-center gap-1.5">
-                            {analysis.mode === 'products' && (
-                              <button
-                                type="button"
-                                disabled={exportingPdf}
-                                onClick={() =>
-                                  handleDownloadProductAnalysisPdf(
-                                    normalizeProductAnalysisResult(analysis.result),
-                                    analysis.preferenceNote || ''
-                                  )
-                                }
-                                className="min-h-[34px] px-3 py-1 inline-flex items-center gap-1.5 bg-[#0B2239] hover:bg-[#143252] text-white text-xs font-semibold rounded-md cursor-pointer disabled:opacity-60 transition-colors"
-                              >
-                                <FileDown className="w-3.5 h-3.5 text-[#FBBF24]" />
-                                <span>PDF Olarak İndir</span>
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              disabled={exportingPdf}
+                              onClick={() =>
+                                analysis.mode === 'products'
+                                  ? handleDownloadProductAnalysisPdf(
+                                      normalizeProductAnalysisResult(analysis.result),
+                                      analysis.preferenceNote || ''
+                                    )
+                                  : handleDownloadSummaryOrNotesPdf({
+                                      analysisOverride: normalizeDocumentAnalysisResult(
+                                        analysis.result
+                                      ),
+                                      includeNotes: Boolean(tender.notes),
+                                    })
+                              }
+                              className="min-h-[34px] px-3 py-1 inline-flex items-center gap-1.5 bg-[#0B2239] hover:bg-[#143252] text-white text-xs font-semibold rounded-md cursor-pointer disabled:opacity-60 transition-colors"
+                            >
+                              <FileDown className="w-3.5 h-3.5 text-[#FBBF24]" />
+                              <span>PDF Olarak İndir</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={printingDoc}
+                              onClick={() =>
+                                analysis.mode === 'products'
+                                  ? handlePrintProductAnalysis(
+                                      normalizeProductAnalysisResult(analysis.result),
+                                      analysis.preferenceNote || ''
+                                    )
+                                  : handlePrintSummaryOrNotes({
+                                      analysisOverride: normalizeDocumentAnalysisResult(
+                                        analysis.result
+                                      ),
+                                      includeNotes: Boolean(tender.notes),
+                                    })
+                              }
+                              className="min-h-[34px] px-3 py-1 inline-flex items-center gap-1.5 bg-white border border-[#DCE3EC] hover:bg-[#F3F6FA] text-[#0B2239] text-xs font-semibold rounded-md cursor-pointer disabled:opacity-60 transition-colors"
+                            >
+                              <Printer className="w-3.5 h-3.5 text-[#0066B3]" />
+                              <span>Yazdır</span>
+                            </button>
                             <button
                               type="button"
                               onClick={() => handleShowSavedAnalysis(analysis)}
@@ -1448,7 +1651,9 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
                 )}
               </div>
 
-              {docs.length > 0 && (
+              {permissions.canAnalyzeDocuments && (
+                <>
+                  {docs.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs text-[#4E5D6C]">
                     {analysisMode === 'products'
@@ -1566,18 +1771,85 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
                     </button>
                   )}
               </div>
+                </>
+              )}
 
               {analysisError && (
                 <div
                   role="alert"
-                  className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 font-medium"
+                  className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2 text-xs text-red-700 font-medium"
                 >
-                  {analysisError}
+                  <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  <span>{analysisError}</span>
                 </div>
               )}
 
               {analysisMode === 'summary' && analysisResult && (
                 <div className="border border-[#DCE3EC] rounded-xl divide-y divide-[#DCE3EC] bg-white">
+                  {/* Üst Araç Çubuğu: PDF İndir ve Yazdır */}
+                  <div className="p-4 bg-[#F3F6FA]/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-0.5 min-w-0">
+                      <div className="text-xs font-bold text-[#0B2239] flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5">
+                          <FileSearch className="w-4 h-4 text-[#0066B3] shrink-0" />
+                          <span>Şartname Özeti &amp; Kritik Tarihler Araştırması</span>
+                        </span>
+                        {activeSummarySavedNote && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#007A53]">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>{activeSummarySavedNote}</span>
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-[#4E5D6C] tabular-nums">
+                        {analysisResult.criticalDates.length} önemli tarih ·{' '}
+                        {analysisResult.keyRequirements.length} öne çıkan şartname koşulu
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleDownloadSummaryOrNotesPdf({
+                            includeNotes: Boolean(tender.notes),
+                          })
+                        }
+                        disabled={exportingPdf}
+                        className="min-h-[38px] px-3.5 inline-flex items-center gap-1.5 bg-[#0B2239] hover:bg-[#143252] text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 whitespace-nowrap transition-colors"
+                      >
+                        {exportingPdf ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FBBF24]" />
+                        ) : (
+                          <FileDown className="w-3.5 h-3.5 text-[#FBBF24]" />
+                        )}
+                        <span>{exportingPdf ? 'PDF Hazırlanıyor…' : 'PDF Olarak İndir'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handlePrintSummaryOrNotes({
+                            includeNotes: Boolean(tender.notes),
+                          })
+                        }
+                        disabled={printingDoc}
+                        className="min-h-[38px] px-3.5 inline-flex items-center gap-1.5 bg-white hover:bg-[#F3F6FA] text-[#0B2239] border border-[#DCE3EC] text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 whitespace-nowrap transition-colors"
+                      >
+                        <Printer className="w-3.5 h-3.5 text-[#0066B3]" />
+                        <span>Yazdır</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {pdfError && (
+                    <div
+                      role="alert"
+                      className="px-4 py-2.5 bg-red-50 text-xs text-red-700 font-medium"
+                    >
+                      {pdfError}
+                    </div>
+                  )}
+
                   <div className="p-4 space-y-1.5">
                     <div className="text-xs font-semibold text-[#4E5D6C]">Doküman Özeti</div>
                     <p className="text-sm text-[#0B2239] leading-relaxed whitespace-pre-wrap">
@@ -1671,6 +1943,44 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
                       </div>
                     </div>
                   )}
+
+                  <div className="p-3.5 bg-[#F3F6FA]/40 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] text-[#4E5D6C]">
+                      Araştırma sonucu bu ihale kaydında saklanır; istediğiniz zaman PDF olarak indirebilir veya yazdırabilirsiniz.
+                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleDownloadSummaryOrNotesPdf({
+                            includeNotes: Boolean(tender.notes),
+                          })
+                        }
+                        disabled={exportingPdf}
+                        className="min-h-[38px] px-3.5 inline-flex items-center gap-1.5 bg-[#0B2239] hover:bg-[#143252] text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 whitespace-nowrap transition-colors"
+                      >
+                        {exportingPdf ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FBBF24]" />
+                        ) : (
+                          <FileDown className="w-3.5 h-3.5 text-[#FBBF24]" />
+                        )}
+                        <span>{exportingPdf ? 'PDF Hazırlanıyor…' : 'PDF Olarak İndir'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handlePrintSummaryOrNotes({
+                            includeNotes: Boolean(tender.notes),
+                          })
+                        }
+                        disabled={printingDoc}
+                        className="min-h-[38px] px-3.5 inline-flex items-center gap-1.5 bg-white hover:bg-[#F3F6FA] text-[#0B2239] border border-[#DCE3EC] text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 whitespace-nowrap transition-colors"
+                      >
+                        <Printer className="w-3.5 h-3.5 text-[#0066B3]" />
+                        <span>Yazdır</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -1735,6 +2045,16 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
                           <FileDown className="w-3.5 h-3.5 text-[#FBBF24]" />
                         )}
                         <span>{exportingPdf ? 'PDF Hazırlanıyor…' : 'PDF Olarak İndir'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handlePrintProductAnalysis()}
+                        disabled={printingDoc}
+                        className="min-h-[38px] px-3.5 inline-flex items-center gap-1.5 bg-white hover:bg-[#F3F6FA] text-[#0B2239] border border-[#DCE3EC] text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 whitespace-nowrap transition-colors"
+                      >
+                        <Printer className="w-3.5 h-3.5 text-[#0066B3]" />
+                        <span>Yazdır</span>
                       </button>
                     </div>
                   </div>
@@ -2094,21 +2414,32 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
 
                   <div className="p-3.5 bg-[#F3F6FA]/40 flex flex-wrap items-center justify-between gap-2">
                     <span className="text-[11px] text-[#4E5D6C]">
-                      Analiz sonucu bu ihale kaydında saklanır; istediğiniz zaman PDF olarak indirebilirsiniz.
+                      Analiz sonucu bu ihale kaydında saklanır; istediğiniz zaman PDF olarak indirebilir veya yazdırabilirsiniz.
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => handleDownloadProductAnalysisPdf()}
-                      disabled={exportingPdf}
-                      className="min-h-[38px] px-3.5 inline-flex items-center gap-1.5 bg-[#0B2239] hover:bg-[#143252] text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 whitespace-nowrap transition-colors"
-                    >
-                      {exportingPdf ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FBBF24]" />
-                      ) : (
-                        <FileDown className="w-3.5 h-3.5 text-[#FBBF24]" />
-                      )}
-                      <span>{exportingPdf ? 'PDF Hazırlanıyor…' : 'PDF Olarak İndir'}</span>
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadProductAnalysisPdf()}
+                        disabled={exportingPdf}
+                        className="min-h-[38px] px-3.5 inline-flex items-center gap-1.5 bg-[#0B2239] hover:bg-[#143252] text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 whitespace-nowrap transition-colors"
+                      >
+                        {exportingPdf ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FBBF24]" />
+                        ) : (
+                          <FileDown className="w-3.5 h-3.5 text-[#FBBF24]" />
+                        )}
+                        <span>{exportingPdf ? 'PDF Hazırlanıyor…' : 'PDF Olarak İndir'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handlePrintProductAnalysis()}
+                        disabled={printingDoc}
+                        className="min-h-[38px] px-3.5 inline-flex items-center gap-1.5 bg-white hover:bg-[#F3F6FA] text-[#0B2239] border border-[#DCE3EC] text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 whitespace-nowrap transition-colors"
+                      >
+                        <Printer className="w-3.5 h-3.5 text-[#0066B3]" />
+                        <span>Yazdır</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

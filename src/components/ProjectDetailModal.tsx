@@ -19,6 +19,8 @@ import {
   ACCOUNTING_PAYMENT_METHOD_LABELS,
   ACCOUNTING_PAYMENT_STATUS_LABELS,
   CurrencyCode,
+  formatProjectManagerNames,
+  getProjectManagers,
   hasProjectsAccess,
   isOwnRecord,
   isProjectIncomeTx,
@@ -47,10 +49,9 @@ interface ProjectDetailModalProps {
   onClose: () => void;
   onEditProject: (project: Project) => void;
   onDeleteProject: (project: Project) => Promise<void>;
-  onReassignManager: (
+  onReassignManagers: (
     project: Project,
-    nextManager: UserAuthorization,
-    alsoGrantAccess: boolean
+    nextManagers: UserAuthorization[]
   ) => Promise<void>;
   onNewTransaction: (projectId: string, txType?: ProjectTransactionType) => void;
   onEditTransaction: (tx: ProjectTransaction) => void;
@@ -74,7 +75,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
   onClose,
   onEditProject,
   onDeleteProject,
-  onReassignManager,
+  onReassignManagers,
   onNewTransaction,
   onEditTransaction,
   onMarkTransactionPaid,
@@ -88,7 +89,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
   const [deletingProject, setDeletingProject] = useState(false);
   const [confirmDeleteTxId, setConfirmDeleteTxId] = useState<string | null>(null);
   const [busyTxId, setBusyTxId] = useState<string | null>(null);
-  const [reassignUid, setReassignUid] = useState('');
+  const [selectedManagerUids, setSelectedManagerUids] = useState<string[]>([]);
   const [reassigning, setReassigning] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -101,14 +102,22 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [project, disableEscClose, onClose]);
 
+  const projectManagersKey = project
+    ? getProjectManagers(project)
+        .map((m) => m.uid)
+        .join(',')
+    : '';
+
   useEffect(() => {
     setConfirmDeleteProject(false);
     setConfirmDeleteTxId(null);
     setErrorMsg(null);
     if (project) {
-      setReassignUid(project.managerUid);
+      setSelectedManagerUids(getProjectManagers(project).map((m) => m.uid));
+    } else {
+      setSelectedManagerUids([]);
     }
-  }, [project?.id, project?.managerUid]);
+  }, [project?.id, projectManagersKey]);
 
   const projectTxs = useMemo(() => {
     if (!project) return [];
@@ -162,6 +171,8 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
 
   if (!project) return null;
 
+  const assignedManagers = getProjectManagers(project);
+  const assignedManagerSummary = formatProjectManagerNames(project);
   const isManager = isProjectManager(project, currentUid);
   const canDeleteOwnProject = isManager && isOwnRecord(project, currentUid);
   const linkedTender = project.tenderId
@@ -171,6 +182,12 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
     ? salesQuotes.find((q) => q.id === project.quoteId) || null
     : null;
   const activeUsers = workspaceUsers.filter((u) => u.status === 'active');
+
+  const currentManagerUidSet = new Set(assignedManagers.map((m) => m.uid));
+  const selectedManagerUidSet = new Set(selectedManagerUids);
+  const hasManagerChanges =
+    currentManagerUidSet.size !== selectedManagerUidSet.size ||
+    selectedManagerUids.some((uid) => !currentManagerUidSet.has(uid));
 
   const mainCur: CurrencyCode = project.currency || 'TRY';
   const mainStats = financialsByCurrency[mainCur];
@@ -197,19 +214,36 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
     }
   };
 
+  const toggleManagerUid = (uid: string) => {
+    setErrorMsg(null);
+    setSelectedManagerUids((prev) => {
+      if (prev.includes(uid)) {
+        return prev.filter((id) => id !== uid);
+      }
+      if (prev.length >= 20) {
+        setErrorMsg('Bir projeye en fazla 20 yönetici atanabilir.');
+        return prev;
+      }
+      return [...prev, uid];
+    });
+  };
+
   const handleReassignSubmit = async () => {
-    const nextManager = activeUsers.find((u) => u.uid === reassignUid);
-    if (!nextManager || nextManager.uid === project.managerUid) return;
+    const nextManagers = selectedManagerUids
+      .map((uid) => activeUsers.find((u) => u.uid === uid))
+      .filter((u): u is UserAuthorization => Boolean(u));
+    if (nextManagers.length === 0) {
+      setErrorMsg('En az bir aktif proje yöneticisi seçilmelidir.');
+      return;
+    }
+    if (!hasManagerChanges) return;
     setReassigning(true);
     setErrorMsg(null);
     try {
-      const needsAccess =
-        nextManager.role !== 'admin' &&
-        !hasProjectsAccess(nextManager.permissions, nextManager.role);
-      await onReassignManager(project, nextManager, needsAccess);
+      await onReassignManagers(project, nextManagers);
     } catch (err) {
       setErrorMsg(
-        err instanceof Error ? err.message : 'Proje yöneticisi güncellenemedi.'
+        err instanceof Error ? err.message : 'Proje yöneticileri güncellenemedi.'
       );
     } finally {
       setReassigning(false);
@@ -350,8 +384,8 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
               <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-[#DCE3EC] rounded-lg text-xs text-[#4E5D6C]">
                 <Lock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
                 <span>
-                  İşlem yetkisi yalnızca Proje Yöneticisi{' '}
-                  <strong className="text-[#0B2239]">{project.managerName}</strong> kullanıcıya aittir
+                  İşlem yetkisi yalnızca atanmış Proje Yöneticilerine (
+                  <strong className="text-[#0B2239]">{assignedManagerSummary}</strong>) aittir
                 </span>
               </span>
             )}
@@ -393,62 +427,163 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
           )}
 
           {/* Authority & Manager Info Card */}
-          <div className="p-4 border border-[#DCE3EC] rounded-xl bg-[#F3F6FA]/50 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <div
-                className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-                  isManager ? 'bg-[#007A53]/20 text-[#007A53]' : 'bg-[#0B2239] text-white'
-                }`}
-              >
-                <UserCheck className="w-4 h-4" />
-              </div>
-              <div className="text-xs space-y-0.5">
-                <div className="font-semibold text-[#0B2239] flex flex-wrap items-center gap-2">
-                  <span>Sorumlu Proje Yöneticisi: {project.managerName}</span>
-                  <span
-                    className={`px-2 py-0.5 text-[11px] font-semibold border rounded-md ${getStatusBadgeClass(
-                      project.status
-                    )}`}
-                  >
-                    {PROJECT_STATUS_LABELS[project.status]}
-                  </span>
+          <div className="p-4 border border-[#DCE3EC] rounded-xl bg-[#F3F6FA]/50 space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+              <div className="flex items-start gap-3 min-w-0 flex-1">
+                <div
+                  className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                    isManager ? 'bg-[#007A53]/20 text-[#007A53]' : 'bg-[#0B2239] text-white'
+                  }`}
+                >
+                  <UserCheck className="w-4 h-4" />
                 </div>
-                <div className="text-[#4E5D6C]">
-                  {project.managerEmail || 'E-posta yok'} · Başlangıç:{' '}
-                  {formatTurkishDate(project.startDate)}
-                  {project.endDate ? ` · Bitiş: ${formatTurkishDate(project.endDate)}` : ''}
-                </div>
-                <div className="text-[11px] text-[#4E5D6C]">
-                  {isManager
-                    ? 'Yetkili proje yöneticisi olarak fatura kesebilir, gelen fatura ve gider ekleyebilirsiniz.'
-                    : 'Bu projede yalnızca görüntüleme yetkiniz var; fatura ve gider yazma yetkisi sadece atanmış proje yöneticisindedir.'}
+                <div className="text-xs space-y-2 min-w-0 flex-1">
+                  <div className="font-semibold text-[#0B2239] flex flex-wrap items-center gap-2">
+                    <span>
+                      Sorumlu Proje {assignedManagers.length > 1 ? 'Yöneticileri' : 'Yöneticisi'} (
+                      {assignedManagers.length})
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 text-[11px] font-semibold border rounded-md ${getStatusBadgeClass(
+                        project.status
+                      )}`}
+                    >
+                      {PROJECT_STATUS_LABELS[project.status]}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5">
+                    {assignedManagers.map((m) => {
+                      const isSelf = m.uid === currentUid;
+                      return (
+                        <div
+                          key={m.uid}
+                          className={`px-2.5 py-1.5 rounded-md border text-xs inline-flex items-center gap-1.5 ${
+                            isSelf
+                              ? 'bg-[#007A53]/10 border-[#007A53]/40 text-[#0B2239]'
+                              : 'bg-white border-[#DCE3EC] text-[#0B2239]'
+                          }`}
+                        >
+                          <span className="font-semibold">{m.displayName}</span>
+                          {m.email && (
+                            <span className="text-[11px] text-[#4E5D6C]">({m.email})</span>
+                          )}
+                          {isSelf && (
+                            <span className="text-[10px] font-mono font-semibold bg-[#007A53]/20 text-[#007A53] px-1.5 py-0.5 rounded">
+                              Siz
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="text-[#4E5D6C]">
+                    Başlangıç: {formatTurkishDate(project.startDate)}
+                    {project.endDate ? ` · Bitiş: ${formatTurkishDate(project.endDate)}` : ''}
+                  </div>
+                  <div className="text-[11px] text-[#4E5D6C]">
+                    {isManager
+                      ? 'Yetkili proje yöneticisi olarak fatura kesebilir, gelen fatura ve gider ekleyebilirsiniz.'
+                      : 'Bu projede yalnızca görüntüleme yetkiniz var; fatura ve gider yazma yetkisi sadece atanmış proje yöneticilerindedir.'}
+                  </div>
                 </div>
               </div>
             </div>
 
             {isAdmin && activeUsers.length > 0 && (
-              <div className="flex items-center gap-2 shrink-0">
-                <select
-                  value={reassignUid}
-                  onChange={(e) => setReassignUid(e.target.value)}
-                  aria-label="Proje Yöneticisini Değiştir"
-                  className="min-h-[38px] px-2.5 py-1 bg-white border border-[#DCE3EC] rounded-lg text-xs text-[#0B2239]"
-                >
-                  {activeUsers.map((u) => (
-                    <option key={u.uid} value={u.uid}>
-                      {u.displayName || u.email}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  disabled={reassigning || reassignUid === project.managerUid}
-                  onClick={handleReassignSubmit}
-                  className="min-h-[38px] px-3 inline-flex items-center gap-1.5 bg-[#0B2239] hover:bg-[#143252] text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${reassigning ? 'animate-spin' : ''}`} />
-                  <span>Yönetici Ata</span>
-                </button>
+              <div className="pt-3 border-t border-[#DCE3EC] space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-semibold text-[#0B2239]">
+                    Yönetici Ata (Aynı projeye birden fazla yönetici seçebilirsiniz)
+                  </div>
+                  <span className="text-[11px] font-mono text-[#4E5D6C]">
+                    {selectedManagerUids.length} / {activeUsers.length} seçili
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-44 overflow-y-auto p-2 bg-white border border-[#DCE3EC] rounded-lg">
+                  {activeUsers.map((u) => {
+                    const checked = selectedManagerUids.includes(u.uid);
+                    const hasAccess = hasProjectsAccess(u.permissions, u.role);
+                    return (
+                      <label
+                        key={u.uid}
+                        className={`p-2 rounded-md border text-xs flex items-start gap-2 cursor-pointer transition-colors ${
+                          checked
+                            ? 'bg-[#0066B3]/8 border-[#0066B3]/50 text-[#0B2239]'
+                            : 'bg-[#F3F6FA]/60 border-[#DCE3EC] text-[#4E5D6C] hover:bg-[#F3F6FA]'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleManagerUid(u.uid)}
+                          className="mt-0.5 w-4 h-4 accent-[#0066B3] shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-[#0B2239] truncate">
+                            {u.displayName || u.email}
+                          </div>
+                          <div className="text-[11px] text-[#4E5D6C] truncate">
+                            {u.email}
+                          </div>
+                          {!hasAccess && (
+                            <div className="text-[10px] text-amber-700 font-medium mt-0.5">
+                              Atanınca proje ekranı açılır
+                            </div>
+                          )}
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-[11px] text-[#4E5D6C]">
+                    {selectedManagerUids.length === 0 ? (
+                      <span className="text-red-700 font-medium">
+                        En az 1 proje yöneticisi seçili olmalıdır.
+                      </span>
+                    ) : hasManagerChanges ? (
+                      <span className="text-[#0066B3] font-medium">
+                        Değişiklikleri kaydetmek için &ldquo;Yönetici Ata&rdquo; düğmesine tıklayın.
+                      </span>
+                    ) : (
+                      <span>Seçili yöneticiler proje kaydıyla güncel.</span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {hasManagerChanges && (
+                      <button
+                        type="button"
+                        disabled={reassigning}
+                        onClick={() =>
+                          setSelectedManagerUids(assignedManagers.map((m) => m.uid))
+                        }
+                        className="min-h-[36px] px-3 bg-white border border-[#DCE3EC] hover:bg-[#F3F6FA] text-[#4E5D6C] text-xs font-medium rounded-lg cursor-pointer"
+                      >
+                        Sıfırla
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={
+                        reassigning ||
+                        selectedManagerUids.length === 0 ||
+                        !hasManagerChanges
+                      }
+                      onClick={handleReassignSubmit}
+                      className="min-h-[38px] px-4 inline-flex items-center gap-1.5 bg-[#0B2239] hover:bg-[#143252] text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 ${reassigning ? 'animate-spin' : ''}`}
+                      />
+                      <span>Yönetici Ata</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>

@@ -2,9 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { X, Briefcase, Award, ShieldAlert, UserCheck } from 'lucide-react';
 import {
   CurrencyCode,
+  formatProjectManagerNames,
+  getProjectManagers,
   hasProjectsAccess,
   Project,
   PROJECT_STATUS_LABELS,
+  ProjectManagerEntry,
   ProjectStatus,
   SalesQuote,
   SCHEMA_LIMITS,
@@ -30,7 +33,7 @@ interface ProjectFormModalProps {
   workspaceUsers: UserAuthorization[];
   onSubmit: (
     data: ProjectInput,
-    options?: { grantProjectViewToManager?: UserAuthorization }
+    options?: { grantProjectViewToManagers?: UserAuthorization[] }
   ) => Promise<void>;
 }
 
@@ -60,7 +63,7 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
   const [startDate, setStartDate] = useState(getTodayDateStr());
   const [endDate, setEndDate] = useState('');
   const [status, setStatus] = useState<ProjectStatus>('aktif');
-  const [managerUid, setManagerUid] = useState('');
+  const [selectedManagerUids, setSelectedManagerUids] = useState<string[]>([]);
   const [grantAccessIfMissing, setGrantAccessIfMissing] = useState(true);
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -143,7 +146,7 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
       setStartDate(editingProject.startDate || getTodayDateStr());
       setEndDate(editingProject.endDate || '');
       setStatus(editingProject.status || 'aktif');
-      setManagerUid(editingProject.managerUid || currentUid);
+      setSelectedManagerUids(getProjectManagers(editingProject).map((m) => m.uid));
       setNotes(editingProject.notes || '');
       return;
     }
@@ -199,7 +202,7 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
     setStartDate(getTodayDateStr());
     setEndDate('');
     setStatus('aktif');
-    setManagerUid(currentUid);
+    setSelectedManagerUids(currentUid ? [currentUid] : []);
     setNotes('');
   }, [open, editingProject, defaultTenderId, defaultQuoteId, currentUid]);
 
@@ -233,13 +236,29 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
     }
   };
 
-  const selectedManagerUser = activeUsers.find((u) => u.uid === managerUid);
-  const managerMissingProjectScreenPerm = Boolean(
-    isAdmin &&
-      selectedManagerUser &&
-      selectedManagerUser.role !== 'admin' &&
-      !hasProjectsAccess(selectedManagerUser.permissions, selectedManagerUser.role)
-  );
+  const selectedManagerUsers = selectedManagerUids
+    .map((uid) => activeUsers.find((u) => u.uid === uid))
+    .filter((u): u is UserAuthorization => Boolean(u));
+
+  const managersMissingProjectScreenPerm = isAdmin
+    ? selectedManagerUsers.filter(
+        (u) => u.role !== 'admin' && !hasProjectsAccess(u.permissions, u.role)
+      )
+    : [];
+
+  const toggleManagerSelection = (uid: string) => {
+    setError(null);
+    setSelectedManagerUids((prev) => {
+      if (prev.includes(uid)) {
+        return prev.filter((id) => id !== uid);
+      }
+      if (prev.length >= 20) {
+        setError('Bir projeye en fazla 20 yönetici atanabilir.');
+        return prev;
+      }
+      return [...prev, uid];
+    });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -256,14 +275,24 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
       return;
     }
 
-    const chosenManager = selectedManagerUser || {
-      uid: currentUid,
-      email: currentEmail,
-      displayName: currentDisplayName || currentEmail,
-    };
+    const chosenManagers: ProjectManagerEntry[] = editingProject
+      ? getProjectManagers(editingProject)
+      : isAdmin
+      ? selectedManagerUsers.map((u) => ({
+          uid: u.uid,
+          email: u.email,
+          displayName: u.displayName || u.email,
+        }))
+      : [
+          {
+            uid: currentUid,
+            email: currentEmail,
+            displayName: currentDisplayName || currentEmail,
+          },
+        ];
 
-    if (!chosenManager.uid) {
-      setError('Lütfen bir Proje Yöneticisi seçin.');
+    if (chosenManagers.length === 0 || !chosenManagers[0].uid) {
+      setError('Lütfen en az bir Proje Yöneticisi seçin.');
       return;
     }
 
@@ -286,22 +315,19 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
           startDate: startDate || getTodayDateStr(),
           endDate: endDate || '',
           status,
-          managerUid: editingProject ? editingProject.managerUid : chosenManager.uid,
-          managerEmail: editingProject
-            ? editingProject.managerEmail
-            : chosenManager.email,
-          managerName: editingProject
-            ? editingProject.managerName
-            : chosenManager.displayName || chosenManager.email,
+          managerUid: chosenManagers[0].uid,
+          managerEmail: chosenManagers[0].email,
+          managerName: chosenManagers.map((m) => m.displayName).join(', '),
+          managerUids: chosenManagers.map((m) => m.uid),
+          managers: chosenManagers,
           notes: notes.trim(),
         },
         {
-          grantProjectViewToManager:
+          grantProjectViewToManagers:
             !editingProject &&
-            managerMissingProjectScreenPerm &&
             grantAccessIfMissing &&
-            selectedManagerUser
-              ? selectedManagerUser
+            managersMissingProjectScreenPerm.length > 0
+              ? managersMissingProjectScreenPerm
               : undefined,
         }
       );
@@ -553,33 +579,56 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-[#0B2239] mb-1.5">
-                Yetkili Proje Yöneticisi *
-              </label>
+            <div className="sm:col-span-2">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-semibold text-[#0B2239]">
+                  Yetkili Proje Yöneticileri *
+                </label>
+                {!editingProject && isAdmin && (
+                  <span className="text-[11px] font-mono text-[#4E5D6C]">
+                    {selectedManagerUids.length} yönetici seçili
+                  </span>
+                )}
+              </div>
               {editingProject ? (
                 <div className="min-h-[44px] px-3 py-2 bg-[#F3F6FA] border border-[#DCE3EC] rounded-lg text-sm text-[#0B2239] flex items-center gap-2">
                   <UserCheck className="w-4 h-4 text-[#0066B3] shrink-0" />
-                  <span className="truncate font-medium">
-                    {editingProject.managerName} ({editingProject.managerEmail})
+                  <span className="font-medium">
+                    {formatProjectManagerNames(editingProject)}
                   </span>
                 </div>
               ) : isAdmin ? (
-                <select
-                  value={managerUid}
-                  onChange={(e) => setManagerUid(e.target.value)}
-                  className="w-full min-h-[44px] px-3 py-2 bg-white border border-[#DCE3EC] rounded-lg text-sm text-[#0B2239] focus:outline-none focus:ring-2 focus:ring-[#0066B3]"
-                >
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2.5 bg-[#F3F6FA]/60 border border-[#DCE3EC] rounded-lg">
                   {activeUsers.map((u) => {
+                    const checked = selectedManagerUids.includes(u.uid);
                     const hasView = hasProjectsAccess(u.permissions, u.role);
                     return (
-                      <option key={u.uid} value={u.uid}>
-                        {u.displayName || u.email} ({u.email})
-                        {hasView ? ' · Proje Yetkili' : ' · Ekran Yetkisi Yok'}
-                      </option>
+                      <label
+                        key={u.uid}
+                        className={`p-2 rounded-md border text-xs flex items-start gap-2 cursor-pointer transition-colors ${
+                          checked
+                            ? 'bg-white border-[#0066B3]/60 text-[#0B2239]'
+                            : 'bg-white/70 border-[#DCE3EC] text-[#4E5D6C] hover:bg-white'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleManagerSelection(u.uid)}
+                          className="mt-0.5 w-4 h-4 accent-[#0066B3] shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-[#0B2239] truncate">
+                            {u.displayName || u.email}
+                          </div>
+                          <div className="text-[11px] text-[#4E5D6C] truncate">
+                            {u.email} {hasView ? '· Proje Yetkili' : '· Ekran Yetkisi Yok'}
+                          </div>
+                        </div>
+                      </label>
                     );
                   })}
-                </select>
+                </div>
               ) : (
                 <div className="min-h-[44px] px-3 py-2 bg-[#F3F6FA] border border-[#DCE3EC] rounded-lg text-sm text-[#0B2239] flex items-center gap-2">
                   <UserCheck className="w-4 h-4 text-[#007A53] shrink-0" />
@@ -591,7 +640,7 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
             </div>
           </div>
 
-          {!editingProject && managerMissingProjectScreenPerm && (
+          {!editingProject && managersMissingProjectScreenPerm.length > 0 && (
             <label className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2.5 cursor-pointer">
               <input
                 type="checkbox"
@@ -602,10 +651,10 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
               <div className="text-xs text-amber-900">
                 <span className="font-semibold flex items-center gap-1">
                   <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
-                  Seçilen yöneticide &ldquo;Proje Yönetimi Ekranı&rdquo; görme yetkisi henüz açık değil.
+                  Seçilen {managersMissingProjectScreenPerm.length} yöneticide &ldquo;Proje Yönetimi Ekranı&rdquo; görme yetkisi henüz açık değil.
                 </span>
                 <span className="block text-[11px] text-amber-800 mt-0.5">
-                  Bu kutu işaretliyken proje oluşturulduğunda kullanıcıya Proje Yönetimi ekranı yetkisi otomatik tanımlanır.
+                  Bu kutu işaretliyken proje oluşturulduğunda seçili kullanıcılara ({managersMissingProjectScreenPerm.map((u) => u.displayName || u.email).join(', ')}) Proje Yönetimi ekranı yetkisi otomatik tanımlanır.
                 </span>
               </div>
             </label>

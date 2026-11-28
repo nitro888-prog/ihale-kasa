@@ -34,7 +34,7 @@ import {
   loadSampleTenderScenario,
   ProjectInput,
   ProjectTransactionInput,
-  reassignProjectManager,
+  reassignProjectManagers,
   SalesQuoteInput,
   saveTenderPricingSheet,
   subscribeAccountingCheques,
@@ -1627,7 +1627,7 @@ export default function App() {
 
   const handleSaveProject = async (
     data: ProjectInput,
-    options?: { grantProjectViewToManager?: UserAuthorization }
+    options?: { grantProjectViewToManagers?: UserAuthorization[] }
   ) => {
     if (!canViewProjects) return;
     if (editingProject) {
@@ -1658,24 +1658,31 @@ export default function App() {
           getTodayDateStr()
         );
       }
-      if (options?.grantProjectViewToManager && userAuth.role === 'admin') {
-        const target = options.grantProjectViewToManager;
-        await updateUserAuthorization(
-          user.uid,
-          workspaceOwnerId,
-          target,
-          {
-            displayName: target.displayName,
-            department: target.department,
-            role: target.role,
-            status: target.status,
-            permissions: {
-              ...target.permissions,
-              canViewProjects: true,
+      if (
+        options?.grantProjectViewToManagers &&
+        options.grantProjectViewToManagers.length > 0 &&
+        userAuth.role === 'admin'
+      ) {
+        const adminUids = getActiveAdminUids();
+        for (const target of options.grantProjectViewToManagers) {
+          if (hasProjectsAccess(target.permissions, target.role)) continue;
+          await updateUserAuthorization(
+            user.uid,
+            workspaceOwnerId,
+            target,
+            {
+              displayName: target.displayName,
+              department: target.department,
+              role: target.role,
+              status: target.status,
+              permissions: {
+                ...target.permissions,
+                canViewProjects: true,
+              },
             },
-          },
-          getActiveAdminUids()
-        );
+            adminUids
+          );
+        }
       }
       setDetailQuoteId(null);
       setActiveView('projects');
@@ -1683,37 +1690,42 @@ export default function App() {
     }
   };
 
-  const handleReassignProjectManager = async (
+  const handleReassignProjectManagers = async (
     project: Project,
-    nextManager: UserAuthorization,
-    alsoGrantAccess: boolean
+    nextManagers: UserAuthorization[]
   ) => {
     if (userAuth.role !== 'admin') return;
-    await reassignProjectManager(project.id, {
-      uid: nextManager.uid,
-      email: nextManager.email,
-      displayName: nextManager.displayName || nextManager.email,
-    });
-    if (
-      alsoGrantAccess &&
-      !hasProjectsAccess(nextManager.permissions, nextManager.role)
-    ) {
-      await updateUserAuthorization(
-        user.uid,
-        workspaceOwnerId,
-        nextManager,
-        {
-          displayName: nextManager.displayName,
-          department: nextManager.department,
-          role: nextManager.role,
-          status: nextManager.status,
-          permissions: {
-            ...nextManager.permissions,
-            canViewProjects: true,
+    if (nextManagers.length === 0) {
+      throw new Error('En az bir proje yöneticisi seçilmelidir.');
+    }
+    await reassignProjectManagers(
+      project.id,
+      nextManagers.map((m) => ({
+        uid: m.uid,
+        email: m.email,
+        displayName: m.displayName || m.email,
+      }))
+    );
+    const adminUids = getActiveAdminUids();
+    for (const nextManager of nextManagers) {
+      if (!hasProjectsAccess(nextManager.permissions, nextManager.role)) {
+        await updateUserAuthorization(
+          user.uid,
+          workspaceOwnerId,
+          nextManager,
+          {
+            displayName: nextManager.displayName,
+            department: nextManager.department,
+            role: nextManager.role,
+            status: nextManager.status,
+            permissions: {
+              ...nextManager.permissions,
+              canViewProjects: true,
+            },
           },
-        },
-        getActiveAdminUids()
-      );
+          adminUids
+        );
+      }
     }
   };
 
@@ -2440,7 +2452,7 @@ export default function App() {
         }}
         onEditProject={handleOpenEditProject}
         onDeleteProject={handleDeleteProject}
-        onReassignManager={handleReassignProjectManager}
+        onReassignManagers={handleReassignProjectManagers}
         onNewTransaction={handleOpenNewProjectTx}
         onEditTransaction={handleOpenEditProjectTx}
         onMarkTransactionPaid={handleMarkProjectTxPaid}

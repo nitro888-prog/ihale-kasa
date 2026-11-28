@@ -18,6 +18,8 @@ import {
 import {
   ACCOUNTING_PAYMENT_STATUS_LABELS,
   CurrencyCode,
+  formatProjectManagerNames,
+  getProjectManagers,
   isOwnRecord,
   isProjectIncomeTx,
   isProjectManager,
@@ -173,11 +175,15 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
       if (statusFilter !== 'all' && project.status !== statusFilter) return false;
       if (onlyManagedByMe && !isManager) return false;
       if (!q) return true;
+      const managersText = getProjectManagers(project)
+        .map((m) => `${m.displayName} ${m.email}`.toLowerCase())
+        .join(' ');
       return (
         project.projectCode.toLowerCase().includes(q) ||
         project.title.toLowerCase().includes(q) ||
         project.authority.toLowerCase().includes(q) ||
         project.managerName.toLowerCase().includes(q) ||
+        managersText.includes(q) ||
         project.tenderTrackingCode.toLowerCase().includes(q) ||
         (project.quoteNumber || '').toLowerCase().includes(q)
       );
@@ -275,7 +281,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
         s.project.tenderTrackingCode || s.project.quoteNumber || '-',
         s.project.title,
         s.project.authority,
-        s.project.managerName,
+        formatProjectManagerNames(s.project),
         PROJECT_STATUS_LABELS[s.project.status],
         cur,
         s.project.contractAmount.toFixed(2),
@@ -692,21 +698,31 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
                           </div>
                         </td>
 
-                        <td className="py-3.5 px-4 align-top whitespace-nowrap">
-                          <div className="inline-flex items-center gap-1.5 font-semibold text-[#0B2239]">
-                            <UserCheck
-                              className={`w-3.5 h-3.5 shrink-0 ${
-                                isManager ? 'text-[#007A53]' : 'text-[#868686]'
-                              }`}
-                            />
-                            <span>{project.managerName}</span>
-                            {isManager && (
-                              <span className="text-[10px] font-mono bg-[#007A53]/20 text-[#007A53] px-1.5 py-0.5 rounded">
-                                Siz
-                              </span>
-                            )}
+                        <td className="py-3.5 px-4 align-top">
+                          <div className="space-y-1">
+                            {getProjectManagers(project).map((m) => {
+                              const isSelf = m.uid === currentUid;
+                              return (
+                                <div
+                                  key={m.uid}
+                                  className="inline-flex items-center gap-1.5 font-semibold text-[#0B2239] mr-2"
+                                >
+                                  <UserCheck
+                                    className={`w-3.5 h-3.5 shrink-0 ${
+                                      isSelf ? 'text-[#007A53]' : 'text-[#868686]'
+                                    }`}
+                                  />
+                                  <span>{m.displayName}</span>
+                                  {isSelf && (
+                                    <span className="text-[10px] font-mono bg-[#007A53]/20 text-[#007A53] px-1.5 py-0.5 rounded">
+                                      Siz
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
-                          <div className="text-[11px] text-[#4E5D6C]">
+                          <div className="text-[11px] text-[#4E5D6C] mt-0.5">
                             {isManager ? 'Tam İşlem Yetkili' : 'Salt Okunur'}
                           </div>
                         </td>
@@ -790,7 +806,9 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
                               </button>
                             ) : (
                               <span
-                                title={`Yalnızca Proje Yöneticisi (${project.managerName}) işlem yapabilir`}
+                                title={`Yalnızca Proje Yöneticileri (${formatProjectManagerNames(
+                                  project
+                                )}) işlem yapabilir`}
                                 className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center border border-[#DCE3EC] rounded-md text-[#868686]"
                               >
                                 <Lock className="w-3.5 h-3.5" />
@@ -943,7 +961,10 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
                           }`}
                         />
                         <span>
-                          Yönetici: <strong className="text-[#0B2239]">{project.managerName}</strong>
+                          {getProjectManagers(project).length > 1 ? 'Yöneticiler:' : 'Yönetici:'}{' '}
+                          <strong className="text-[#0B2239]">
+                            {formatProjectManagerNames(project)}
+                          </strong>
                         </span>
                       </div>
                       <span>{txCount} finansal hareket</span>

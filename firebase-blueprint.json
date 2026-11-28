@@ -846,6 +846,8 @@
         "managerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
         "managerEmail": { "type": "string", "maxLength": 120 },
         "managerName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "managerUids": { "type": "array" },
+        "managers": { "type": "array" },
         "notes": { "type": "string", "maxLength": 2000 },
         "createdBy": { "type": "string", "maxLength": 128 },
         "createdByEmail": { "type": "string", "maxLength": 120 },
