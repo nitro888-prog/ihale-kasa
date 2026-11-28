@@ -270,14 +270,43 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
         `${nextManagers.length} proje yöneticisi projeye atandı.`
       );
     } catch (err) {
-      const msg =
+      const rawMsg =
         err instanceof Error ? err.message : 'Proje yöneticileri güncellenemedi.';
-      if (msg.includes('Missing or insufficient permissions')) {
+      let parsedInfo: {
+        error?: string;
+        operationType?: string;
+        path?: string | null;
+        authInfo?: { userId?: string | null; email?: string | null; emailVerified?: boolean | null };
+      } | null = null;
+      try {
+        if (rawMsg.startsWith('{')) {
+          parsedInfo = JSON.parse(rawMsg);
+        }
+      } catch {
+        parsedInfo = null;
+      }
+
+      console.error('[ProjectDetailModal] Yönetici atama hatası:', {
+        projectId: project.id,
+        projectOwnerId: project.ownerId,
+        currentUid,
+        selectedManagerUids,
+        details: parsedInfo || rawMsg,
+      });
+
+      const underlyingMsg = parsedInfo?.error || rawMsg;
+      if (
+        underlyingMsg.includes('Missing or insufficient permissions') ||
+        underlyingMsg.includes('permission-denied')
+      ) {
+        const locationHint = parsedInfo?.path
+          ? ` (İşlem: ${parsedInfo.operationType || 'update'} · Yol: ${parsedInfo.path})`
+          : '';
         setErrorMsg(
-          'Yönetici atama için Firestore yetkisi reddedildi. Lütfen yönetici oturumunuzu ve kuralları kontrol edin.'
+          `Yönetici atama için Firestore yetkisi reddedildi. Lütfen yönetici oturumunuzu ve kuralları kontrol edin.${locationHint}`
         );
       } else {
-        setErrorMsg(msg);
+        setErrorMsg(underlyingMsg);
       }
     } finally {
       setReassigning(false);

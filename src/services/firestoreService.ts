@@ -330,6 +330,25 @@ export async function ensureUserAuthorization(
         }
       }
 
+      if (!isBootstrap && data.role === 'admin' && data.status === 'active') {
+        try {
+          const adminSnap = await getDoc(adminRef);
+          if (!adminSnap.exists()) {
+            await setDoc(adminRef, {
+              uid,
+              email: emailLower,
+              grantedBy: data.approvedBy || uid,
+              createdAt: serverTimestamp(),
+            });
+          }
+        } catch (markerErr) {
+          console.warn(
+            'Admin marker sync skipped:',
+            markerErr instanceof Error ? markerErr.message : String(markerErr)
+          );
+        }
+      }
+
       return data;
     }
 
@@ -601,19 +620,24 @@ export async function updateUserAuthorization(
       updatedAt: serverTimestamp(),
     });
 
-    const adminRef = doc(db, 'admins', targetUser.uid);
-    const adminSnap = await getDoc(adminRef);
     const shouldBeAdmin = updates.role === 'admin' && updates.status === 'active';
+    const needsAdminMarkerSync =
+      shouldBeAdmin || targetUser.role === 'admin' || targetUser.status !== updates.status;
 
-    if (shouldBeAdmin && !adminSnap.exists()) {
-      await setDoc(adminRef, {
-        uid: targetUser.uid,
-        email: targetUser.email.toLowerCase(),
-        grantedBy: adminUid,
-        createdAt: serverTimestamp(),
-      });
-    } else if (!shouldBeAdmin && adminSnap.exists() && targetUser.uid !== adminUid) {
-      await deleteDoc(adminRef);
+    if (needsAdminMarkerSync) {
+      const adminRef = doc(db, 'admins', targetUser.uid);
+      const adminSnap = await getDoc(adminRef);
+
+      if (shouldBeAdmin && !adminSnap.exists()) {
+        await setDoc(adminRef, {
+          uid: targetUser.uid,
+          email: targetUser.email.toLowerCase(),
+          grantedBy: adminUid,
+          createdAt: serverTimestamp(),
+        });
+      } else if (!shouldBeAdmin && adminSnap.exists() && targetUser.uid !== adminUid) {
+        await deleteDoc(adminRef);
+      }
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
@@ -2606,6 +2630,13 @@ export async function reassignProjectManagers(
   managers: ProjectManagerEntry[],
   memberIds?: string[]
 ): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser?.uid) {
+    throw new Error('Yönetici atama işlemi için aktif Firebase oturumu bulunamadı.');
+  }
+  if (!currentUser.emailVerified) {
+    throw new Error('Yönetici atama işlemi için doğrulanmış e-posta hesabı gereklidir.');
+  }
   const path = `projects/${projectId}`;
   const managerFields = normalizeProjectManagers(managers);
   const updatePayload: Record<string, unknown> = {

@@ -1694,8 +1694,14 @@ export default function App() {
     project: Project,
     nextManagers: UserAuthorization[]
   ) => {
-    if (userAuth.role !== 'admin') {
-      throw new Error('Proje yöneticisi atama yetkisi yalnızca sistem yöneticilerine aittir.');
+    if (!user?.uid || !auth.currentUser) {
+      throw new Error('Yönetici atama işlemi için oturum açmanız gerekir.');
+    }
+    if (!user.emailVerified) {
+      throw new Error('Yönetici atama işlemi için e-posta adresinizin doğrulanmış olması gerekir.');
+    }
+    if (userAuth.status !== 'active' || userAuth.role !== 'admin') {
+      throw new Error('Proje yöneticisi atama yetkisi yalnızca aktif sistem yöneticilerine aittir.');
     }
     if (nextManagers.length === 0) {
       throw new Error('En az bir proje yöneticisi seçilmelidir.');
@@ -1720,22 +1726,32 @@ export default function App() {
     for (const nextManager of nextManagers) {
       const realUser = workspaceUsers.find((u) => u.uid === nextManager.uid);
       if (realUser && !hasProjectsAccess(realUser.permissions, realUser.role)) {
-        await updateUserAuthorization(
-          user.uid,
-          workspaceOwnerId,
-          realUser,
-          {
-            displayName: realUser.displayName,
-            department: realUser.department,
-            role: realUser.role,
-            status: realUser.status,
-            permissions: {
-              ...realUser.permissions,
-              canViewProjects: true,
+        try {
+          await updateUserAuthorization(
+            user.uid,
+            workspaceOwnerId,
+            realUser,
+            {
+              displayName: realUser.displayName,
+              department: realUser.department,
+              role: realUser.role,
+              status: realUser.status,
+              permissions: {
+                ...realUser.permissions,
+                canViewProjects: true,
+              },
             },
-          },
-          adminUids
-        );
+            adminUids
+          );
+        } catch (err) {
+          console.error('[App] Yönetici proje ekranı yetkisi güncellenemedi:', {
+            projectId: project.id,
+            targetUid: realUser.uid,
+            actorUid: user.uid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        }
       }
     }
   };

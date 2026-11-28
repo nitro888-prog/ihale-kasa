@@ -35,16 +35,32 @@ service cloud.firestore {
       return isVerified() && request.auth.token.email.lower() == 'nitro888@gmail.com';
     }
 
-    function isAdmin() {
-      return isBootstrapAdmin() || (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
-    }
-
     function hasUserRecord() {
       return isVerified() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
     function currentUserData() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasActiveAdminUserRecord() {
+      return hasUserRecord()
+        && currentUserData().status == 'active'
+        && currentUserData().role == 'admin';
+    }
+
+    function isAdmin() {
+      return isBootstrapAdmin()
+        || (
+          isVerified()
+          && (
+            hasActiveAdminUserRecord()
+            || (
+              exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+              && !hasUserRecord()
+            )
+          )
+        );
     }
 
     function isActiveMemberOf(workspaceOwnerId) {
@@ -59,15 +75,18 @@ service cloud.firestore {
     }
 
     function isWorkspaceAdmin(workspaceOwnerId) {
-      return isAdmin() && (
-        request.auth.uid == workspaceOwnerId
+      return isBootstrapAdmin()
         || (
-          hasUserRecord()
-          && currentUserData().status == 'active'
-          && currentUserData().role == 'admin'
-          && currentUserData().workspaceOwnerId == workspaceOwnerId
-        )
-      );
+          isAdmin() && (
+            request.auth.uid == workspaceOwnerId
+            || (
+              hasUserRecord()
+              && currentUserData().status == 'active'
+              && currentUserData().role == 'admin'
+              && currentUserData().workspaceOwnerId == workspaceOwnerId
+            )
+          )
+        );
     }
 
     function hasWorkspacePermission(workspaceOwnerId, permKey) {
