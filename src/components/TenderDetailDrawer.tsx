@@ -101,6 +101,71 @@ interface DocumentAnalysisResult {
   keyRequirements: KeyRequirementItem[];
 }
 
+function normalizeDocumentAnalysisResult(raw: unknown): DocumentAnalysisResult {
+  const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const rawDates = Array.isArray(obj.criticalDates) ? obj.criticalDates : [];
+  const rawReqs = Array.isArray(obj.keyRequirements) ? obj.keyRequirements : [];
+  return {
+    summary: String(obj.summary ?? '').trim(),
+    criticalDates: rawDates.map((d) => {
+      const item = (d && typeof d === 'object' ? d : {}) as Record<string, unknown>;
+      return {
+        label: String(item.label ?? '').trim(),
+        dateText: String(item.dateText ?? '').trim(),
+        isoDate: String(item.isoDate ?? '').trim(),
+        importance: String(item.importance ?? 'bilgi').trim() || 'bilgi',
+        excerpt: String(item.excerpt ?? '').trim(),
+      };
+    }),
+    keyRequirements: rawReqs.map((r) => {
+      const item = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>;
+      return {
+        title: String(item.title ?? '').trim(),
+        detail: String(item.detail ?? '').trim(),
+      };
+    }),
+  };
+}
+
+function normalizeProductAnalysisResult(raw: unknown): ProductAnalysisResult {
+  const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const rawItems = Array.isArray(obj.items) ? obj.items : [];
+  const rawGeneral = Array.isArray(obj.generalRecommendations)
+    ? obj.generalRecommendations
+    : [];
+  return {
+    overview: String(obj.overview ?? '').trim(),
+    items: rawItems.map((it, idx) => {
+      const item = (it && typeof it === 'object' ? it : {}) as Record<string, unknown>;
+      const specs = Array.isArray(item.requiredSpecs) ? item.requiredSpecs : [];
+      const recs = Array.isArray(item.recommendations) ? item.recommendations : [];
+      return {
+        itemNo: String(item.itemNo ?? `Kalem ${idx + 1}`).trim() || `Kalem ${idx + 1}`,
+        productName: String(item.productName ?? '').trim() || `Ürün Kalemi ${idx + 1}`,
+        quantityAndUnit:
+          String(item.quantityAndUnit ?? 'Belirtilmemiş').trim() || 'Belirtilmemiş',
+        requiredSpecs: specs.map((s) => String(s ?? '').trim()).filter(Boolean),
+        complianceRisks: String(item.complianceRisks ?? '').trim(),
+        recommendations: recs.map((r) => {
+          const rec = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>;
+          return {
+            brand: String(rec.brand ?? '').trim(),
+            model: String(rec.model ?? '').trim(),
+            partNumberHint: String(rec.partNumberHint ?? '').trim(),
+            segment: String(rec.segment ?? '').trim(),
+            compatibilityLevel: String(rec.compatibilityLevel ?? '').trim(),
+            rationale: String(rec.rationale ?? '').trim(),
+            verificationChecklist: String(rec.verificationChecklist ?? '').trim(),
+          };
+        }),
+      };
+    }),
+    generalRecommendations: rawGeneral
+      .map((g) => String(g ?? '').trim())
+      .filter(Boolean),
+  };
+}
+
 type AnalysisMode = 'summary' | 'products';
 
 interface TenderDetailDrawerProps {
@@ -187,7 +252,12 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const [productViewMode, setProductViewMode] = useState<'cards' | 'list'>('cards');
+  const [activeProductSavedNote, setActiveProductSavedNote] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const analysisFileInputRef = useRef<HTMLInputElement>(null);
+  const userSelectedTabRef = useRef(false);
+  const hasHydratedProductRef = useRef(false);
+  const hasHydratedSummaryRef = useRef(false);
 
   useEffect(() => {
     setFetchedDbProducts(null);
@@ -209,11 +279,13 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
     setDeleteError(null);
     setDeletingTender(false);
     setUploadError(null);
+    setAnalysisMode('summary');
     setAnalysisText('');
     setPreferenceNote('');
     setAnalysisError(null);
     setAnalysisResult(null);
     setProductAnalysisResult(null);
+    setActiveProductSavedNote(null);
     setSavedAnalyses([]);
     setLoadingSavedAnalyses(false);
     setSavedAnalysisError(null);
@@ -221,6 +293,9 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
     setFetchedDbProducts(null);
     setDbInspectError(null);
     setPdfError(null);
+    userSelectedTabRef.current = false;
+    hasHydratedProductRef.current = false;
+    hasHydratedSummaryRef.current = false;
     if (!tender) {
       setDocs([]);
       return;
@@ -240,6 +315,31 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
         setSavedAnalyses(items);
         setLoadingSavedAnalyses(false);
         setSavedAnalysisError(null);
+
+        const latestProducts = items.find((a) => a.mode === 'products');
+        const latestSummary = items.find((a) => a.mode === 'summary');
+
+        if (latestProducts && !hasHydratedProductRef.current) {
+          hasHydratedProductRef.current = true;
+          setProductAnalysisResult(normalizeProductAnalysisResult(latestProducts.result));
+          if (latestProducts.preferenceNote) {
+            setPreferenceNote((prev) => prev || latestProducts.preferenceNote || '');
+          }
+          setActiveProductSavedNote('İhale kaydında saklı son ürün analizi');
+        }
+
+        if (latestSummary && !hasHydratedSummaryRef.current) {
+          hasHydratedSummaryRef.current = true;
+          setAnalysisResult(normalizeDocumentAnalysisResult(latestSummary.result));
+        }
+
+        if (!userSelectedTabRef.current && latestProducts) {
+          const prodTs = latestProducts.createdAt?.seconds || 0;
+          const sumTs = latestSummary?.createdAt?.seconds || 0;
+          if (!latestSummary || prodTs >= sumTs) {
+            setAnalysisMode('products');
+          }
+        }
       },
       (error) => {
         setLoadingSavedAnalyses(false);
@@ -334,16 +434,20 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
     }
   };
 
-  const handleDownloadProductAnalysisPdf = async () => {
-    if (!productAnalysisResult) return;
+  const handleDownloadProductAnalysisPdf = async (
+    analysisOverride?: ProductAnalysisResult,
+    preferenceOverride?: string
+  ) => {
+    const targetAnalysis = analysisOverride || productAnalysisResult;
+    if (!targetAnalysis) return;
     setExportingPdf(true);
     setPdfError(null);
     try {
       await downloadProductAnalysisPdf({
         tender,
         companyName,
-        preferenceNote,
-        analysis: productAnalysisResult,
+        preferenceNote: preferenceOverride ?? preferenceNote,
+        analysis: targetAnalysis,
         dbProducts: effectiveDbProducts,
       });
     } catch (err) {
@@ -371,10 +475,11 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
     setDbInspectError(null);
     setPdfError(null);
     try {
+      const apiBase = (import.meta.env.BASE_URL || '/').replace(/\/?$/, '/');
       const endpoint =
         mode === 'products'
-          ? '/api/tenders/analyze-products'
-          : '/api/tenders/analyze-document';
+          ? `${apiBase}api/tenders/analyze-products`
+          : `${apiBase}api/tenders/analyze-document`;
 
       const buildRequestInit = (
         authHeaders: Record<string, string>
@@ -386,6 +491,7 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
             payload.fileBlob,
             payload.fileName || 'dokuman.pdf'
           );
+          if (payload.mimeType) fd.append('mimeType', payload.mimeType);
           if (payload.text) fd.append('text', payload.text);
           fd.append('tenderTitle', tender.title);
           fd.append('trackingCode', tender.trackingCode);
@@ -414,11 +520,24 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
         };
       };
 
-      let headers = await getAuthBearerHeaders();
-      let response = await fetch(endpoint, buildRequestInit(headers));
-      if (response.status === 401) {
-        headers = await getAuthBearerHeaders(true);
-        response = await fetch(endpoint, buildRequestInit(headers));
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 90000);
+      let response: Response;
+      try {
+        let headers = await getAuthBearerHeaders();
+        response = await fetch(endpoint, {
+          ...buildRequestInit(headers),
+          signal: controller.signal,
+        });
+        if (response.status === 401) {
+          headers = await getAuthBearerHeaders(true);
+          response = await fetch(endpoint, {
+            ...buildRequestInit(headers),
+            signal: controller.signal,
+          });
+        }
+      } finally {
+        window.clearTimeout(timeoutId);
       }
 
       const rawText = await response.text();
@@ -443,9 +562,14 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
             'Gönderilen doküman boyutu sunucu sınırını (10 MB) aşıyor. Lütfen daha küçük bir dosya seçin veya ilgili metni yapıştırın.'
           );
         }
-        if (response.status === 502 || response.status === 504) {
+        if (response.status === 429) {
           throw new Error(
-            'Yapay zeka analiz sunucusu zaman aşımına uğradı. Lütfen birkaç saniye sonra tekrar deneyin veya daha kısa bir metin bölümü girin.'
+            'Çok fazla analiz isteği gönderildi. Lütfen kısa bir süre bekleyip tekrar deneyin.'
+          );
+        }
+        if (response.status === 502 || response.status === 503 || response.status === 504) {
+          throw new Error(
+            'Yapay zeka analiz sunucusu şu anda yoğun veya yanıt süresi aşıldı. Lütfen birkaç saniye sonra tekrar deneyin veya daha kısa bir metin bölümü girin.'
           );
         }
         if (response.status === 401 || response.status === 403) {
@@ -458,15 +582,23 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
         );
       }
 
+      const normalizedForStore =
+        mode === 'products'
+          ? normalizeProductAnalysisResult(data)
+          : normalizeDocumentAnalysisResult(data);
+
       if (mode === 'products') {
-        setProductAnalysisResult(data as unknown as ProductAnalysisResult);
+        hasHydratedProductRef.current = true;
+        setProductAnalysisResult(normalizedForStore as ProductAnalysisResult);
+        setActiveProductSavedNote('Ekrana kaydedildi');
         fetchWorkspaceBidProducts(uid, workspaceOwnerId)
           .then((freshProducts) => setFetchedDbProducts(freshProducts))
           .catch(() => {
             // Gerçek zamanlı bidProducts aboneliği yedek olarak devrede
           });
       } else {
-        setAnalysisResult(data as unknown as DocumentAnalysisResult);
+        hasHydratedSummaryRef.current = true;
+        setAnalysisResult(normalizedForStore as DocumentAnalysisResult);
       }
 
       // Başarılı analiz sonucunu Firestore arşivine kaydet.
@@ -476,7 +608,7 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
           tenderId: tender.id,
           actor,
           mode,
-          result: data,
+          result: normalizedForStore as unknown as Record<string, unknown>,
           preferenceNote: mode === 'products' ? preferenceNote : '',
           memberIds,
         });
@@ -484,14 +616,27 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
       } catch (archiveError) {
         setSavedAnalysisError(
           archiveError instanceof Error
-            ? `Analiz tamamlandı ancak arşive kaydedilemedi: ${archiveError.message}`
-            : 'Analiz tamamlandı ancak arşive kaydedilemedi.'
+            ? `Analiz tamamlandı ancak veritabanı arşivine kaydedilemedi: ${archiveError.message}`
+            : 'Analiz tamamlandı ancak veritabanı arşivine kaydedilemedi.'
         );
       }
     } catch (err) {
-      setAnalysisError(
-        err instanceof Error ? err.message : 'Analiz sırasında bir hata oluştu.'
-      );
+      if (err instanceof Error && err.name === 'AbortError') {
+        setAnalysisError(
+          'Analiz isteği zaman aşımına uğradı. Çok uzun bir dosya gönderdiyseniz yalnızca ilgili şartname bölümünü yapıştırarak veya birkaç saniye sonra tekrar deneyin.'
+        );
+      } else if (
+        err instanceof Error &&
+        /failed to fetch|networkerror|load failed/i.test(err.message)
+      ) {
+        setAnalysisError(
+          'Analiz sunucusuna ulaşılamadı. İnternet bağlantınızı kontrol edip birkaç saniye sonra tekrar deneyin.'
+        );
+      } else {
+        setAnalysisError(
+          err instanceof Error ? err.message : 'Analiz sırasında bir hata oluştu.'
+        );
+      }
     } finally {
       setAnalyzing(false);
     }
@@ -511,6 +656,106 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
     await runAnalysisRequest({ text: analysisText }, targetMode);
   };
 
+  const resolveAnalyzableMime = (fileName: string, mimeType: string): string | null => {
+    const lowerName = (fileName || '').toLowerCase();
+    const lowerMime = (mimeType || '').toLowerCase().split(';')[0].trim();
+
+    if (
+      lowerMime.startsWith('text/') ||
+      lowerName.endsWith('.txt') ||
+      lowerName.endsWith('.csv')
+    ) {
+      return lowerName.endsWith('.csv') ? 'text/csv' : 'text/plain';
+    }
+    if (
+      lowerMime === 'application/pdf' ||
+      lowerMime === 'application/x-pdf' ||
+      lowerName.endsWith('.pdf')
+    ) {
+      return 'application/pdf';
+    }
+    if (
+      lowerMime ===
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      lowerName.endsWith('.docx')
+    ) {
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
+    if (
+      lowerMime ===
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      lowerName.endsWith('.xlsx')
+    ) {
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    }
+    if (lowerName.endsWith('.png') || lowerMime === 'image/png') return 'image/png';
+    if (
+      lowerName.endsWith('.jpg') ||
+      lowerName.endsWith('.jpeg') ||
+      lowerMime === 'image/jpeg'
+    ) {
+      return 'image/jpeg';
+    }
+    if (lowerName.endsWith('.webp') || lowerMime === 'image/webp') return 'image/webp';
+    if (lowerName.endsWith('.gif') || lowerMime === 'image/gif') return 'image/gif';
+    if (lowerMime.startsWith('image/')) return lowerMime;
+    return null;
+  };
+
+  const analyzeBlobFile = async (blob: Blob, fileName: string, mimeType: string) => {
+    const resolvedMime = resolveAnalyzableMime(fileName, mimeType);
+    if (!resolvedMime) {
+      setAnalyzing(false);
+      setAnalysisError(
+        'Doğrudan dosya analizi PDF, DOCX, XLSX, metin (TXT/CSV) ve görsel dosyalarını destekler. Diğer dosyaların metnini yukarıdaki alana yapıştırabilirsiniz.'
+      );
+      return;
+    }
+
+    if (resolvedMime === 'text/plain' || resolvedMime === 'text/csv') {
+      const text = await blob.text();
+      setAnalysisText(text);
+      await runAnalysisRequest({ text, fileName }, analysisMode);
+      return;
+    }
+
+    if (blob.size > 10 * 1024 * 1024) {
+      setAnalyzing(false);
+      setAnalysisError(
+        `Seçilen doküman 10 MB analiz sınırını aşıyor (${(blob.size / (1024 * 1024)).toFixed(1)} MB). İlgili şartname metnini yukarıdaki alana yapıştırarak analiz edebilirsiniz.`
+      );
+      return;
+    }
+
+    await runAnalysisRequest(
+      {
+        text: analysisText.trim() || undefined,
+        fileBlob: blob,
+        mimeType: resolvedMime,
+        fileName,
+      },
+      analysisMode
+    );
+  };
+
+  const handleDirectAnalysisFileChange = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setAnalyzing(true);
+    setAnalysisError(null);
+    try {
+      await analyzeBlobFile(file, file.name, file.type);
+    } catch (err) {
+      setAnalyzing(false);
+      setAnalysisError(
+        err instanceof Error ? err.message : 'Seçilen dosya analiz edilemedi.'
+      );
+    }
+  };
+
   const handleAnalyzeVaultDoc = async (d: TenderDocument) => {
     setAnalyzing(true);
     setAnalysisError(null);
@@ -521,55 +766,7 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
         tender.id,
         d
       );
-      const lowerName = d.name.toLowerCase();
-      const lowerMime = (d.mimeType || '').toLowerCase();
-      const isText =
-        lowerMime.startsWith('text/') ||
-        lowerName.endsWith('.txt') ||
-        lowerName.endsWith('.csv');
-
-      if (isText) {
-        const text = await blob.text();
-        setAnalysisText(text);
-        await runAnalysisRequest({ text, fileName: d.name }, analysisMode);
-        return;
-      }
-
-      const isSupportedBinary =
-        lowerMime === 'application/pdf' ||
-        lowerMime === 'application/x-pdf' ||
-        lowerName.endsWith('.pdf') ||
-        lowerMime.startsWith('image/') ||
-        lowerName.endsWith('.png') ||
-        lowerName.endsWith('.jpg') ||
-        lowerName.endsWith('.jpeg') ||
-        lowerName.endsWith('.webp');
-
-      if (!isSupportedBinary) {
-        setAnalyzing(false);
-        setAnalysisError(
-          'Doğrudan dosya analizi PDF, metin ve görsel dosyalarını destekler. Diğer dosyaların metnini yukarıdaki alana yapıştırabilirsiniz.'
-        );
-        return;
-      }
-
-      if (blob.size > 10 * 1024 * 1024) {
-        setAnalyzing(false);
-        setAnalysisError(
-          `Seçilen doküman 10 MB analiz sınırını aşıyor (${(blob.size / (1024 * 1024)).toFixed(1)} MB). İlgili şartname metnini yukarıdaki alana yapıştırarak analiz edebilirsiniz.`
-        );
-        return;
-      }
-
-      await runAnalysisRequest(
-        {
-          text: analysisText.trim() || undefined,
-          fileBlob: blob,
-          mimeType: d.mimeType || 'application/pdf',
-          fileName: d.name,
-        },
-        analysisMode
-      );
+      await analyzeBlobFile(blob, d.name, d.mimeType || '');
     } catch (err) {
       setAnalyzing(false);
       setAnalysisError(
@@ -619,28 +816,30 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
         { currentUid: uid, workspaceOwnerId, canSyncProducts: permissions.canManageProducts }
       );
       setSavedNotesFeedback(true);
+    } catch (err) {
+      setAnalysisError(
+        err instanceof Error ? err.message : 'Analiz ihale notlarına eklenemedi.'
+      );
     } finally {
       setSavingToNotes(false);
     }
   };
 
   const handleShowSavedAnalysis = (analysis: SavedTenderAnalysis) => {
+    userSelectedTabRef.current = true;
     setAnalysisMode(analysis.mode);
     setAnalysisError(null);
     setSavedAnalysisError(null);
     setSavedNotesFeedback(false);
 
     if (analysis.mode === 'products') {
-      setProductAnalysisResult(
-        analysis.result as unknown as ProductAnalysisResult
-      );
-      setAnalysisResult(null);
+      hasHydratedProductRef.current = true;
+      setProductAnalysisResult(normalizeProductAnalysisResult(analysis.result));
       setPreferenceNote(analysis.preferenceNote || '');
+      setActiveProductSavedNote('Kayıtlı analiz arşivinden yüklendi');
     } else {
-      setAnalysisResult(
-        analysis.result as unknown as DocumentAnalysisResult
-      );
-      setProductAnalysisResult(null);
+      hasHydratedSummaryRef.current = true;
+      setAnalysisResult(normalizeDocumentAnalysisResult(analysis.result));
     }
   };
 
@@ -1126,6 +1325,7 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
                   <button
                     type="button"
                     onClick={() => {
+                      userSelectedTabRef.current = true;
                       setAnalysisMode('summary');
                       setAnalysisError(null);
                       setSavedNotesFeedback(false);
@@ -1141,6 +1341,7 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
                   <button
                     type="button"
                     onClick={() => {
+                      userSelectedTabRef.current = true;
                       setAnalysisMode('products');
                       setAnalysisError(null);
                       setSavedNotesFeedback(false);
@@ -1176,33 +1377,67 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
                   </p>
                 ) : (
                   <div className="space-y-2">
-                    {savedAnalyses.map((analysis) => (
-                      <div
-                        key={analysis.id}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white border border-[#DCE3EC] px-3 py-2"
-                      >
-                        <div>
-                          <p className="text-xs font-semibold text-[#0B2239]">
-                            {analysis.mode === 'products'
-                              ? 'Ürün & Marka/Model Analizi'
-                              : 'Özet & Kritik Tarihler Analizi'}
-                          </p>
-                          {analysis.preferenceNote && (
-                            <p className="text-[11px] text-[#4E5D6C] mt-0.5">
-                              {analysis.preferenceNote}
-                            </p>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleShowSavedAnalysis(analysis)}
-                          className="min-h-[34px] px-3 py-1 inline-flex items-center gap-1.5 bg-[#E8F2FA] hover:bg-[#D5E8F7] text-[#0066B3] text-xs font-semibold rounded-md cursor-pointer transition-colors"
+                    {savedAnalyses.map((analysis) => {
+                      const savedDateText = analysis.createdAt?.seconds
+                        ? new Date(analysis.createdAt.seconds * 1000).toLocaleString('tr-TR', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : '';
+                      return (
+                        <div
+                          key={analysis.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white border border-[#DCE3EC] px-3 py-2"
                         >
-                          <FileSearch className="w-3.5 h-3.5" />
-                          Analizi Göster
-                        </button>
-                      </div>
-                    ))}
+                          <div>
+                            <p className="text-xs font-semibold text-[#0B2239]">
+                              {analysis.mode === 'products'
+                                ? 'Ürün & Marka/Model Analizi'
+                                : 'Özet & Kritik Tarihler Analizi'}
+                              {savedDateText ? (
+                                <span className="ml-2 font-mono font-normal text-[11px] text-[#4E5D6C]">
+                                  · {savedDateText}
+                                </span>
+                              ) : null}
+                            </p>
+                            {analysis.preferenceNote && (
+                              <p className="text-[11px] text-[#4E5D6C] mt-0.5">
+                                {analysis.preferenceNote}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {analysis.mode === 'products' && (
+                              <button
+                                type="button"
+                                disabled={exportingPdf}
+                                onClick={() =>
+                                  handleDownloadProductAnalysisPdf(
+                                    normalizeProductAnalysisResult(analysis.result),
+                                    analysis.preferenceNote || ''
+                                  )
+                                }
+                                className="min-h-[34px] px-3 py-1 inline-flex items-center gap-1.5 bg-[#0B2239] hover:bg-[#143252] text-white text-xs font-semibold rounded-md cursor-pointer disabled:opacity-60 transition-colors"
+                              >
+                                <FileDown className="w-3.5 h-3.5 text-[#FBBF24]" />
+                                <span>PDF Olarak İndir</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleShowSavedAnalysis(analysis)}
+                              className="min-h-[34px] px-3 py-1 inline-flex items-center gap-1.5 bg-[#E8F2FA] hover:bg-[#D5E8F7] text-[#0066B3] text-xs font-semibold rounded-md cursor-pointer transition-colors"
+                            >
+                              <FileSearch className="w-3.5 h-3.5" />
+                              <span>Ekranda Göster</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
 
@@ -1259,33 +1494,54 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
               )}
 
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={() => handleAnalyzeText()}
-                  disabled={analyzing}
-                  className="min-h-[44px] px-4 py-2 inline-flex items-center gap-2 bg-[#0066B3] hover:bg-[#00508E] text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 transition-colors"
-                >
-                  {analyzing ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>
-                        {analysisMode === 'products'
-                          ? 'Ürünler & Marka/Modeller Analiz Ediliyor…'
-                          : 'Doküman Analiz Ediliyor…'}
-                      </span>
-                    </>
-                  ) : analysisMode === 'products' ? (
-                    <>
-                      <Cpu className="w-4 h-4" />
-                      <span>Ürün Özelliklerini Analiz Et ve Marka/Model Öner</span>
-                    </>
-                  ) : (
-                    <>
-                      <FileSearch className="w-4 h-4" />
-                      <span>Dokümanı Analiz Et</span>
-                    </>
-                  )}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleAnalyzeText()}
+                    disabled={analyzing}
+                    className="min-h-[44px] px-4 py-2 inline-flex items-center gap-2 bg-[#0066B3] hover:bg-[#00508E] text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 transition-colors"
+                  >
+                    {analyzing ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>
+                          {analysisMode === 'products'
+                            ? 'Ürünler & Marka/Modeller Analiz Ediliyor…'
+                            : 'Doküman Analiz Ediliyor…'}
+                        </span>
+                      </>
+                    ) : analysisMode === 'products' ? (
+                      <>
+                        <Cpu className="w-4 h-4" />
+                        <span>Ürün Özelliklerini Analiz Et ve Marka/Model Öner</span>
+                      </>
+                    ) : (
+                      <>
+                        <FileSearch className="w-4 h-4" />
+                        <span>Dokümanı Analiz Et</span>
+                      </>
+                    )}
+                  </button>
+
+                  <input
+                    ref={analysisFileInputRef}
+                    type="file"
+                    accept=".pdf,.docx,.xlsx,.txt,.csv,image/png,image/jpeg,image/webp,application/pdf"
+                    onChange={handleDirectAnalysisFileChange}
+                    disabled={analyzing}
+                    className="hidden"
+                    id="direct-ai-analysis-file"
+                  />
+                  <label
+                    htmlFor="direct-ai-analysis-file"
+                    className={`min-h-[44px] px-3.5 py-2 inline-flex items-center gap-1.5 bg-white border border-[#DCE3EC] hover:bg-[#F3F6FA] text-[#0B2239] text-xs font-semibold rounded-lg cursor-pointer transition-colors ${
+                      analyzing ? 'opacity-60 pointer-events-none' : ''
+                    }`}
+                  >
+                    <Upload className="w-4 h-4 text-[#0066B3]" />
+                    <span>Dosyadan Analiz Et (PDF / DOCX / XLSX / Görsel)</span>
+                  </label>
+                </div>
 
                 {((analysisMode === 'summary' && analysisResult) ||
                   (analysisMode === 'products' && productAnalysisResult)) &&
@@ -1423,9 +1679,17 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
                   {/* Üst Araç Çubuğu: Veritabanı İnceleme & PDF İndirme */}
                   <div className="p-4 bg-[#F3F6FA]/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="space-y-0.5 min-w-0">
-                      <div className="text-xs font-bold text-[#0B2239] flex items-center gap-1.5">
-                        <Database className="w-4 h-4 text-[#0066B3] shrink-0" />
-                        <span>Veritabanı Fiyat Taraması &amp; Rapor Çıktısı</span>
+                      <div className="text-xs font-bold text-[#0B2239] flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5">
+                          <Database className="w-4 h-4 text-[#0066B3] shrink-0" />
+                          <span>Ürün Analizi &amp; Veritabanı Fiyat Taraması</span>
+                        </span>
+                        {activeProductSavedNote && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#007A53]">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>{activeProductSavedNote}</span>
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] text-[#4E5D6C] tabular-nums">
                         {effectiveDbProducts.length} kayıtlı ürün kartı taranıyor ·{' '}
@@ -1461,7 +1725,7 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
 
                       <button
                         type="button"
-                        onClick={handleDownloadProductAnalysisPdf}
+                        onClick={() => handleDownloadProductAnalysisPdf()}
                         disabled={exportingPdf}
                         className="min-h-[38px] px-3.5 inline-flex items-center gap-1.5 bg-[#0B2239] hover:bg-[#143252] text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 whitespace-nowrap transition-colors"
                       >
@@ -1827,6 +2091,25 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
                       </ul>
                     </div>
                   )}
+
+                  <div className="p-3.5 bg-[#F3F6FA]/40 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] text-[#4E5D6C]">
+                      Analiz sonucu bu ihale kaydında saklanır; istediğiniz zaman PDF olarak indirebilirsiniz.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadProductAnalysisPdf()}
+                      disabled={exportingPdf}
+                      className="min-h-[38px] px-3.5 inline-flex items-center gap-1.5 bg-[#0B2239] hover:bg-[#143252] text-white text-xs font-semibold rounded-lg cursor-pointer disabled:opacity-60 whitespace-nowrap transition-colors"
+                    >
+                      {exportingPdf ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FBBF24]" />
+                      ) : (
+                        <FileDown className="w-3.5 h-3.5 text-[#FBBF24]" />
+                      )}
+                      <span>{exportingPdf ? 'PDF Hazırlanıyor…' : 'PDF Olarak İndir'}</span>
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

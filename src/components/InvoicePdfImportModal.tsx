@@ -296,25 +296,37 @@ export const InvoicePdfImportModal: React.FC<InvoicePdfImportModalProps> = ({
       const buildFormData = () => {
         const fd = new FormData();
         fd.append('file', file, file.name);
+        fd.append('mimeType', mime);
         fd.append('ownCompanyName', ownCompanyName);
         fd.append('ownTaxNumber', ownTaxNumber);
         fd.append('preferredDirection', dirOverride ?? preferredDirection);
         return fd;
       };
 
-      let headers = await getAuthBearerHeaders();
-      let res = await fetch('/api/accounting/parse-invoice-pdf', {
-        method: 'POST',
-        headers: { Authorization: headers.Authorization },
-        body: buildFormData(),
-      });
-      if (res.status === 401) {
-        headers = await getAuthBearerHeaders(true);
-        res = await fetch('/api/accounting/parse-invoice-pdf', {
+      const apiBase = (import.meta.env.BASE_URL || '/').replace(/\/?$/, '/');
+      const parseEndpoint = `${apiBase}api/accounting/parse-invoice-pdf`;
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 90000);
+      let res: Response;
+      try {
+        let headers = await getAuthBearerHeaders();
+        res = await fetch(parseEndpoint, {
           method: 'POST',
           headers: { Authorization: headers.Authorization },
           body: buildFormData(),
+          signal: controller.signal,
         });
+        if (res.status === 401) {
+          headers = await getAuthBearerHeaders(true);
+          res = await fetch(parseEndpoint, {
+            method: 'POST',
+            headers: { Authorization: headers.Authorization },
+            body: buildFormData(),
+            signal: controller.signal,
+          });
+        }
+      } finally {
+        window.clearTimeout(timeoutId);
       }
 
       const rawText = await res.text();
@@ -334,9 +346,15 @@ export const InvoicePdfImportModal: React.FC<InvoicePdfImportModalProps> = ({
         if (res.status === 413) {
           throw new Error('Yüklenen fatura dosyası sunucu boyut sınırını (10 MB) aşıyor.');
         }
-        if (res.status === 502 || res.status === 504) {
+        if (res.status === 429) {
+          throw new Error('Çok fazla analiz isteği gönderildi. Lütfen kısa bir süre sonra tekrar deneyin.');
+        }
+        if (res.status === 401 || res.status === 403) {
+          throw new Error('Oturum doğrulaması geçersiz veya süresi dolmuş. Lütfen sayfayı yenileyip tekrar deneyin.');
+        }
+        if (res.status === 502 || res.status === 503 || res.status === 504) {
           throw new Error(
-            'Sunucu çözümleme isteğine zamanında yanıt veremedi. Lütfen tekrar deneyin.'
+            'Yapay zeka çözümleme servisi şu anda yoğun veya yanıt süresi aşıldı. Lütfen birkaç saniye sonra tekrar deneyin.'
           );
         }
         throw new Error(`Fatura PDF dosyası çözümlenemedi (HTTP ${res.status}).`);
@@ -438,9 +456,22 @@ export const InvoicePdfImportModal: React.FC<InvoicePdfImportModalProps> = ({
       setItems(parsedItems);
       setHasParsedData(true);
     } catch (err) {
-      setParseError(
-        err instanceof Error ? err.message : 'PDF fatura çözümlenirken hata oluştu.'
-      );
+      if (err instanceof Error && err.name === 'AbortError') {
+        setParseError(
+          'Fatura okuma isteği zaman aşımına uğradı. Lütfen birkaç saniye sonra tekrar deneyin.'
+        );
+      } else if (
+        err instanceof Error &&
+        /failed to fetch|networkerror|load failed/i.test(err.message)
+      ) {
+        setParseError(
+          'Sunucuya ulaşılamadı. İnternet bağlantınızı kontrol edip birkaç saniye sonra tekrar deneyin.'
+        );
+      } else {
+        setParseError(
+          err instanceof Error ? err.message : 'PDF fatura çözümlenirken hata oluştu.'
+        );
+      }
     } finally {
       setParsing(false);
     }

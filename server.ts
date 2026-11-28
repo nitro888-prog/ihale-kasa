@@ -4,6 +4,7 @@ import fs from 'fs';
 import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import zlib from 'zlib';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { getApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth as getAdminAuth, type DecodedIdToken } from 'firebase-admin/auth';
@@ -48,6 +49,11 @@ const MAX_REQUESTS_PER_HOUR = Math.max(
   Number(process.env.GEMINI_RATE_LIMIT_PER_HOUR) || 40
 );
 const MAX_GEMINI_BASE64_LENGTH = 15_000_000; // ~11 MB binary payload
+const DOCX_MIME =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const XLSX_MIME =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
 const ALLOWED_GEMINI_MIME_TYPES = new Set([
   'application/pdf',
   'image/png',
@@ -56,6 +62,8 @@ const ALLOWED_GEMINI_MIME_TYPES = new Set([
   'image/gif',
   'text/plain',
   'text/csv',
+  DOCX_MIME,
+  XLSX_MIME,
 ]);
 
 // In-memory per-user sliding window store keyed strictly by verified Firebase UID
@@ -195,14 +203,44 @@ function normalizeAttachmentMime(mimeType?: string, fileName?: string): string {
   if (raw === 'text/plain' || raw === 'text/csv') {
     return raw;
   }
+  if (raw === DOCX_MIME) return DOCX_MIME;
+  if (raw === XLSX_MIME) return XLSX_MIME;
 
   if (lowerName.endsWith('.pdf')) return 'application/pdf';
   if (lowerName.endsWith('.png')) return 'image/png';
   if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) return 'image/jpeg';
   if (lowerName.endsWith('.webp')) return 'image/webp';
   if (lowerName.endsWith('.gif')) return 'image/gif';
+  if (lowerName.endsWith('.txt')) return 'text/plain';
+  if (lowerName.endsWith('.csv')) return 'text/csv';
+  if (lowerName.endsWith('.docx')) return DOCX_MIME;
+  if (lowerName.endsWith('.xlsx')) return XLSX_MIME;
 
   return raw;
+}
+
+function resolveUploadedMime(uploadedFile?: Express.Multer.File, bodyMime?: string): string | undefined {
+  if (!uploadedFile) return bodyMime;
+  const uploadedMime = (uploadedFile.mimetype || '').trim().toLowerCase();
+  if (uploadedMime && uploadedMime !== 'application/octet-stream' && uploadedMime !== 'binary/octet-stream') {
+    return uploadedFile.mimetype;
+  }
+  return bodyMime || uploadedFile.mimetype;
+}
+
+function decodeUploadFileName(fileName?: string): string | undefined {
+  if (!fileName) return fileName;
+  if (/[ÃÄÅ]/.test(fileName)) {
+    try {
+      const converted = Buffer.from(fileName, 'latin1').toString('utf8');
+      if (!converted.includes('\ufffd')) {
+        return converted;
+      }
+    } catch {
+      // Keep original filename
+    }
+  }
+  return fileName;
 }
 
 function cleanAttachmentBase64(fileBase64: string): string {
@@ -226,7 +264,7 @@ function validateBinaryAttachment(
   if (!ALLOWED_GEMINI_MIME_TYPES.has(cleanMime)) {
     return {
       valid: false,
-      error: 'Desteklenmeyen dosya türü. Yalnızca PDF, görsel (PNG/JPG/WEBP) veya metin dosyaları analiz edilebilir.',
+      error: 'Desteklenmeyen dosya türü. Yalnızca PDF, DOCX, XLSX, görsel (PNG/JPG/WEBP) veya metin dosyaları analiz edilebilir.',
     };
   }
   const cleanBase64 = cleanAttachmentBase64(fileBase64);
@@ -245,13 +283,151 @@ function validateBinaryAttachment(
   return { valid: true, cleanMime, cleanBase64 };
 }
 
-function extractGeminiJson(rawText: string | undefined): Record<string, unknown> {
+function decodeXmlEntities(xml: string): string {
+  return xml
+    .replace(/<\/(?:w:p|w:tr|row|si|p|tr|div|li|br)\b[^>]*>/gi, '\n')
+    .replace(/<\/(?:w:tc|c|td|th)\b[^>]*>/gi, ' | ')
+    .replace(/<w:tab\b[^>]*\/?>/gi, '\t')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;|&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_m, dec) => String.fromCharCode(Number(dec) || 32))
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+function readZipEntries(zipBuf: Buffer): Map<string, Buffer> {
+  const entries = new Map<string, Buffer>();
+  // Locate End of Central Directory (PK\x05\x06) scanning backwards from end
+  const minOffset = Math.max(0, zipBuf.length - 65557);
+  let eocdOffset = -1;
+  for (let i = zipBuf.length - 22; i >= minOffset; i--) {
+    if (
+      zipBuf[i] === 0x50 &&
+      zipBuf[i + 1] === 0x4b &&
+      zipBuf[i + 2] === 0x05 &&
+      zipBuf[i + 3] === 0x06
+    ) {
+      eocdOffset = i;
+      break;
+    }
+  }
+  if (eocdOffset < 0) return entries;
+
+  const cdOffset = zipBuf.readUInt32LE(eocdOffset + 16);
+  const cdSize = zipBuf.readUInt32LE(eocdOffset + 12);
+  let pos = cdOffset;
+  const cdEnd = Math.min(zipBuf.length, cdOffset + cdSize);
+
+  while (pos + 46 <= cdEnd) {
+    if (
+      zipBuf[pos] !== 0x50 ||
+      zipBuf[pos + 1] !== 0x4b ||
+      zipBuf[pos + 2] !== 0x01 ||
+      zipBuf[pos + 3] !== 0x02
+    ) {
+      break;
+    }
+    const method = zipBuf.readUInt16LE(pos + 10);
+    const compSize = zipBuf.readUInt32LE(pos + 20);
+    const nameLen = zipBuf.readUInt16LE(pos + 28);
+    const extraLen = zipBuf.readUInt16LE(pos + 30);
+    const commentLen = zipBuf.readUInt16LE(pos + 32);
+    const localHeaderOffset = zipBuf.readUInt32LE(pos + 42);
+    const entryName = zipBuf.toString('utf8', pos + 46, pos + 46 + nameLen);
+    pos += 46 + nameLen + extraLen + commentLen;
+
+    if (
+      !entryName.endsWith('.xml') ||
+      localHeaderOffset + 30 > zipBuf.length ||
+      zipBuf[localHeaderOffset] !== 0x50 ||
+      zipBuf[localHeaderOffset + 1] !== 0x4b
+    ) {
+      continue;
+    }
+    const lfhNameLen = zipBuf.readUInt16LE(localHeaderOffset + 26);
+    const lfhExtraLen = zipBuf.readUInt16LE(localHeaderOffset + 28);
+    const dataStart = localHeaderOffset + 30 + lfhNameLen + lfhExtraLen;
+    const dataEnd = Math.min(zipBuf.length, dataStart + compSize);
+    if (dataStart > zipBuf.length || dataEnd < dataStart) continue;
+
+    const slice = zipBuf.subarray(dataStart, dataEnd);
+    try {
+      if (method === 0) {
+        entries.set(entryName, slice);
+      } else if (method === 8) {
+        entries.set(entryName, zlib.inflateRawSync(slice));
+      }
+    } catch {
+      // Skip malformed entry
+    }
+  }
+  return entries;
+}
+
+function extractTextFromOfficeAttachment(base64Data: string, mimeType: string): string {
+  const buf = Buffer.from(base64Data, 'base64');
+  const entries = readZipEntries(buf);
+  if (entries.size === 0) {
+    throw new Error('OFFICE_PARSE_FAILED');
+  }
+
+  const chunks: string[] = [];
+  if (mimeType === DOCX_MIME) {
+    const docEntry = entries.get('word/document.xml');
+    if (docEntry) {
+      chunks.push(decodeXmlEntities(docEntry.toString('utf8')));
+    }
+    for (const [name, content] of entries.entries()) {
+      if (/^word\/(?:header|footer)\d+\.xml$/i.test(name)) {
+        const t = decodeXmlEntities(content.toString('utf8'));
+        if (t) chunks.push(t);
+      }
+    }
+  } else if (mimeType === XLSX_MIME) {
+    const sharedEntry = entries.get('xl/sharedStrings.xml');
+    if (sharedEntry) {
+      chunks.push(decodeXmlEntities(sharedEntry.toString('utf8')));
+    }
+    for (const [name, content] of entries.entries()) {
+      if (/^xl\/worksheets\/sheet\d+\.xml$/i.test(name)) {
+        const xml = content.toString('utf8');
+        const inlineTexts = xml.match(/<(?:t|v)\b[^>]*>[^<]+<\/(?:t|v)>/gi);
+        if (inlineTexts && inlineTexts.length > 0) {
+          chunks.push(decodeXmlEntities(inlineTexts.join(' ')));
+        }
+      }
+    }
+  }
+
+  const combined = chunks.filter(Boolean).join('\n\n').trim();
+  if (!combined) {
+    throw new Error('OFFICE_EMPTY_TEXT');
+  }
+  return combined;
+}
+
+function extractGeminiJson(
+  rawText: string | undefined,
+  finishReason?: string
+): Record<string, unknown> {
   const trimmed = (rawText ?? '').trim();
   if (!trimmed) {
+    if (finishReason === 'MAX_TOKENS') {
+      throw new Error('GEMINI_MAX_TOKENS');
+    }
+    if (finishReason && finishReason !== 'STOP') {
+      throw new Error(`GEMINI_BLOCKED_${finishReason}`);
+    }
     throw new Error('EMPTY_GEMINI_RESPONSE');
   }
   let candidate = trimmed;
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (fenced && fenced[1]) {
     candidate = fenced[1].trim();
   }
@@ -261,7 +437,15 @@ function extractGeminiJson(rawText: string | undefined): Record<string, unknown>
     const firstBrace = candidate.indexOf('{');
     const lastBrace = candidate.lastIndexOf('}');
     if (firstBrace >= 0 && lastBrace > firstBrace) {
-      return JSON.parse(candidate.slice(firstBrace, lastBrace + 1)) as Record<string, unknown>;
+      try {
+        return JSON.parse(candidate.slice(firstBrace, lastBrace + 1)) as Record<string, unknown>;
+      } catch {
+        // Fall through to error
+      }
+    }
+    console.error('Invalid Gemini JSON snippet:', candidate.slice(0, 400));
+    if (finishReason === 'MAX_TOKENS') {
+      throw new Error('GEMINI_MAX_TOKENS');
     }
     throw new Error('INVALID_GEMINI_JSON');
   }
@@ -300,40 +484,94 @@ function createGeminiClient(apiKey: string) {
 async function generateGeminiWithRetry(
   ai: GoogleGenAI,
   request: Parameters<typeof ai.models.generateContent>[0],
-  maxAttempts = 3
-) {
-  let lastError: unknown;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-return await ai.models.generateContent(request);
-    } catch (err) {
-lastError = err;
-
-const message = err instanceof Error ? err.message : String(err);
-const upper = message.toUpperCase();
-
-const isTemporary =
-  message.includes('503') ||
-  message.includes('504') ||
-  upper.includes('UNAVAILABLE') ||
-  upper.includes('DEADLINE_EXCEEDED') ||
-  upper.includes('TIMEOUT');
-
-if (!isTemporary || attempt === maxAttempts) {
-  throw err;
-}
-
-const delay = attempt * 2000;
-console.warn(
-  `Gemini geçici hata verdi. ${attempt}/${maxAttempts} deneme. ${delay} ms sonra tekrar denenecek.`
-);
-
-await new Promise((resolve) => setTimeout(resolve, delay));
-    }
+  maxAttempts = 2,
+  options?: {
+    timeoutMs?: number;
+    fallbackModel?: string;
+    fallbackThinkingLevel?: ThinkingLevel;
   }
+) {
+  const timeoutMs = options?.timeoutMs ?? 28000;
+  const fallbackModel = options?.fallbackModel ?? 'gemini-3.1-flash-lite';
+  const fallbackThinkingLevel = options?.fallbackThinkingLevel ?? ThinkingLevel.MINIMAL;
 
-  throw lastError;
+  const isRetryableError = (err: unknown): boolean => {
+    const name = err instanceof Error ? err.name : '';
+    const message = err instanceof Error ? err.message : String(err);
+    const upper = message.toUpperCase();
+    const status = Number((err as { status?: number; statusCode?: number })?.status || (err as { statusCode?: number })?.statusCode || 0);
+    return (
+      name === 'AbortError' ||
+      name === 'TimeoutError' ||
+      status === 500 ||
+      status === 502 ||
+      status === 503 ||
+      status === 504 ||
+      message.includes('500') ||
+      message.includes('502') ||
+      message.includes('503') ||
+      message.includes('504') ||
+      upper.includes('UNAVAILABLE') ||
+      upper.includes('DEADLINE_EXCEEDED') ||
+      upper.includes('TIMEOUT') ||
+      upper.includes('ABORT') ||
+      upper.includes('ETIMEDOUT') ||
+      upper.includes('ECONNRESET') ||
+      upper.includes('FETCH FAILED')
+    );
+  };
+
+  const runWithModel = async (
+    modelName: string,
+    attempts: number,
+    thinkingLevelOverride?: ThinkingLevel
+  ) => {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const baseConfig = request.config ? { ...request.config } : {};
+        if (thinkingLevelOverride !== undefined) {
+          baseConfig.thinkingConfig = {
+            ...(baseConfig.thinkingConfig || {}),
+            thinkingLevel: thinkingLevelOverride,
+          };
+        }
+        return await ai.models.generateContent({
+          ...request,
+          model: modelName,
+          config: {
+            ...baseConfig,
+            abortSignal: AbortSignal.timeout(timeoutMs),
+          },
+        });
+      } catch (err) {
+        lastErr = err;
+        if (!isRetryableError(err) || attempt === attempts) {
+          throw err;
+        }
+        const delay = attempt * 1500;
+        console.warn(
+          `Gemini geçici hata (${modelName}, ${attempt}/${attempts}). ${delay} ms sonra tekrar denenecek:`,
+          err instanceof Error ? err.message : String(err)
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    throw lastErr;
+  };
+
+  try {
+    return await runWithModel(request.model, maxAttempts);
+  } catch (primaryErr) {
+    if (fallbackModel && fallbackModel !== request.model && isRetryableError(primaryErr)) {
+      console.warn(
+        `Birincil model (${request.model}) geçici hata verdi, yedek modele (${fallbackModel}) geçiliyor:`,
+        primaryErr instanceof Error ? primaryErr.message : String(primaryErr)
+      );
+      return await runWithModel(fallbackModel, 2, fallbackThinkingLevel);
+    }
+    throw primaryErr;
+  }
 }
 
 function handleGeminiRouteError(res: express.Response, err: unknown, fallbackMessage: string) {
@@ -357,44 +595,81 @@ function handleGeminiRouteError(res: express.Response, err: unknown, fallbackMes
 }
   const message = err instanceof Error ? err.message : String(err);
   const upper = message.toUpperCase();
+  const statusCode = Number((err as any)?.status || (err as any)?.statusCode || 0);
 
   if (
+    statusCode === 403 ||
     message.includes('403') ||
     upper.includes('API_KEY_INVALID') ||
+    upper.includes('API KEY NOT VALID') ||
+    upper.includes('API_KEY_SERVICE_BLOCKED') ||
     upper.includes('PERMISSION_DENIED')
   ) {
     return res.status(403).json({
       error:
-        'Gemini API anahtarı doğrulanamadı. Lütfen Ayarlar > Gizli Anahtarlar panelinden anahtarınızı kontrol edin.',
+        'Gemini API anahtarı doğrulanamadı veya yetkisiz. Lütfen Settings > Secrets panelinden GEMINI_API_KEY değerini kontrol edin.',
     });
   }
-  if (message.includes('429') || upper.includes('RESOURCE_EXHAUSTED')) {
+  if (statusCode === 404 || upper.includes('NOT_FOUND')) {
+    return res.status(502).json({
+      error:
+        'Yapay zeka modeli veya uç noktası bulunamadı. Lütfen birkaç saniye sonra tekrar deneyin.',
+    });
+  }
+  if (statusCode === 429 || message.includes('429') || upper.includes('RESOURCE_EXHAUSTED')) {
     return res.status(429).json({
       error: 'Gemini API kota sınırına ulaşıldı. Lütfen biraz sonra tekrar deneyin.',
     });
   }
   if (
-    message.includes('400') ||
-    upper.includes('INVALID_ARGUMENT') ||
     upper.includes('PASSWORD') ||
     upper.includes('ENCRYPTED') ||
-    upper.includes('UNABLE TO PROCESS INPUT')
+    upper.includes('UNABLE TO PROCESS INPUT') ||
+    upper.includes('NO_PAGES') ||
+    upper.includes('CORRUPT')
   ) {
     return res.status(400).json({
       error:
         'Yüklenen PDF veya görsel okunamadı. Dosya şifreli, bozuk ya da desteklenmeyen formatta olabilir.',
     });
   }
+  if (statusCode === 400 || message.includes('400') || upper.includes('INVALID_ARGUMENT')) {
+    return res.status(400).json({
+      error:
+        'Yapay zeka servisi gönderilen dosya veya metin biçimini işleyemedi. Lütfen dosya boyutunu/formatını kontrol edin veya ilgili metni yapıştırarak tekrar deneyin.',
+    });
+  }
+  if (message === 'OFFICE_PARSE_FAILED' || message === 'OFFICE_EMPTY_TEXT') {
+    return res.status(400).json({
+      error:
+        'Yüklenen DOCX/XLSX dosyasının metin içeriği okunamadı. Dosya eski (.doc/.xls) biçimdeyse PDF olarak kaydedin veya metni yapıştırın.',
+    });
+  }
   if (
+    statusCode === 503 ||
+    statusCode === 504 ||
+    (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) ||
     message.includes('503') ||
     message.includes('504') ||
     upper.includes('UNAVAILABLE') ||
     upper.includes('DEADLINE_EXCEEDED') ||
-    upper.includes('TIMEOUT')
+    upper.includes('TIMEOUT') ||
+    upper.includes('ABORT')
   ) {
     return res.status(503).json({
       error:
         'Yapay zeka çözümleme servisi şu anda yoğun veya yanıt süresi aşıldı. Lütfen birkaç saniye sonra tekrar deneyin.',
+    });
+  }
+  if (message === 'GEMINI_MAX_TOKENS') {
+    return res.status(502).json({
+      error:
+        'Doküman çok uzun olduğu için yapay zeka yanıtı yarıda kesildi. Lütfen yalnızca ilgili bölümü veya daha kısa bir dosya yükleyerek tekrar deneyin.',
+    });
+  }
+  if (message.startsWith('GEMINI_BLOCKED_')) {
+    return res.status(422).json({
+      error: 'Doküman içeriği yapay zeka güvenlik filtresi nedeniyle işlenemedi.',
     });
   }
   if (message === 'EMPTY_GEMINI_RESPONSE' || message === 'INVALID_GEMINI_JSON') {
@@ -423,6 +698,14 @@ async function startServer() {
     next();
   });
 
+  app.get('/api/health', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+      ok: true,
+      geminiConfigured: Boolean((process.env.GEMINI_API_KEY || '').trim()),
+    });
+  });
+
   app.post(
     '/api/tenders/analyze-document',
     requireFirebaseAuth,
@@ -438,8 +721,10 @@ async function startServer() {
       const fileBase64 = uploadedFile
         ? uploadedFile.buffer.toString('base64')
         : body.fileBase64;
-      const fileName = uploadedFile ? uploadedFile.originalname : body.fileName;
-      const mimeType = uploadedFile ? uploadedFile.mimetype : body.mimeType;
+      const fileName = decodeUploadFileName(
+        uploadedFile ? uploadedFile.originalname : body.fileName
+      );
+      const mimeType = resolveUploadedMime(uploadedFile, body.mimeType);
 
       const trimmedText = typeof text === 'string' ? text.trim() : '';
       const hasFile = typeof fileBase64 === 'string' && fileBase64.trim().length > 0;
@@ -462,7 +747,7 @@ async function startServer() {
       if (!apiKey) {
         return res.status(500).json({
           error:
-            'GEMINI_API_KEY ortam değişkeni tanımlı değil. Lütfen Ayarlar > Gizli Anahtarlar panelini kontrol edin.',
+            'GEMINI_API_KEY ortam değişkeni tanımlı değil. Lütfen Settings > Secrets panelinden API anahtarınızı ekleyin.',
         });
       }
 
@@ -480,13 +765,31 @@ async function startServer() {
         { text: string } | { inlineData: { mimeType: string; data: string } }
       > = [];
 
+      let decodedTextAttachment = '';
       if (hasFile && attachmentCheck.cleanBase64 && attachmentCheck.cleanMime) {
-        promptParts.push({
-          inlineData: {
-            mimeType: attachmentCheck.cleanMime,
-            data: attachmentCheck.cleanBase64,
-          },
-        });
+        if (
+          attachmentCheck.cleanMime === 'text/plain' ||
+          attachmentCheck.cleanMime === 'text/csv'
+        ) {
+          decodedTextAttachment = Buffer.from(attachmentCheck.cleanBase64, 'base64')
+            .toString('utf8')
+            .trim();
+        } else if (
+          attachmentCheck.cleanMime === DOCX_MIME ||
+          attachmentCheck.cleanMime === XLSX_MIME
+        ) {
+          decodedTextAttachment = extractTextFromOfficeAttachment(
+            attachmentCheck.cleanBase64,
+            attachmentCheck.cleanMime
+          );
+        } else {
+          promptParts.push({
+            inlineData: {
+              mimeType: attachmentCheck.cleanMime,
+              data: attachmentCheck.cleanBase64,
+            },
+          });
+        }
       }
 
       const instructionPrompt = [
@@ -496,6 +799,9 @@ async function startServer() {
         '2) Metinde geçen TÜM önemli tarihleri ve süreleri (teklif sunum son tarihi/saati, geçici teminat son/vade tarihi, zeyilname/açıklama isteme son günü, yer görme, sözleşme veya iş bitim süreleri) tespit et ve importance alanını "kritik", "yuksek" veya "bilgi" olarak işaretle.',
         '3) En kritik şartname koşullarını (geçici teminat oranı/tutarı, iş deneyim oranı, teslim/ceza koşulları) maddeler halinde çıkar.',
         trimmedText ? `\n--- DOKÜMAN METNİ ---\n${trimmedText.slice(0, 60000)}` : '',
+        decodedTextAttachment
+          ? `\n--- DOSYA METNİ ---\n${decodedTextAttachment.slice(0, 60000)}`
+          : '',
       ]
         .filter(Boolean)
         .join('\n\n');
@@ -570,8 +876,31 @@ async function startServer() {
         },
       });
 
-      const parsed = extractGeminiJson(response.text);
-      return res.json(parsed);
+      const finishReason = response.candidates?.[0]?.finishReason;
+      const parsed = extractGeminiJson(response.text, finishReason);
+      const rawDates = Array.isArray(parsed.criticalDates) ? parsed.criticalDates : [];
+      const rawReqs = Array.isArray(parsed.keyRequirements) ? parsed.keyRequirements : [];
+      return res.json({
+        summary: String(parsed.summary ?? '').trim(),
+        criticalDates: rawDates.map((d) => {
+          const obj = (d || {}) as Record<string, unknown>;
+          const imp = String(obj.importance ?? 'bilgi').trim();
+          return {
+            label: String(obj.label ?? '').trim(),
+            dateText: String(obj.dateText ?? '').trim(),
+            isoDate: String(obj.isoDate ?? '').trim(),
+            importance: imp === 'kritik' || imp === 'yuksek' ? imp : 'bilgi',
+            excerpt: String(obj.excerpt ?? '').trim(),
+          };
+        }),
+        keyRequirements: rawReqs.map((r) => {
+          const obj = (r || {}) as Record<string, unknown>;
+          return {
+            title: String(obj.title ?? '').trim(),
+            detail: String(obj.detail ?? '').trim(),
+          };
+        }),
+      });
     } catch (err) {
       return handleGeminiRouteError(
         res,
@@ -597,8 +926,10 @@ async function startServer() {
       const fileBase64 = uploadedFile
         ? uploadedFile.buffer.toString('base64')
         : body.fileBase64;
-      const fileName = uploadedFile ? uploadedFile.originalname : body.fileName;
-      const mimeType = uploadedFile ? uploadedFile.mimetype : body.mimeType;
+      const fileName = decodeUploadFileName(
+        uploadedFile ? uploadedFile.originalname : body.fileName
+      );
+      const mimeType = resolveUploadedMime(uploadedFile, body.mimeType);
 
       const trimmedText = typeof text === 'string' ? text.trim() : '';
       const trimmedPref = typeof preferenceNote === 'string' ? preferenceNote.trim() : '';
@@ -622,7 +953,7 @@ async function startServer() {
       if (!apiKey) {
         return res.status(500).json({
           error:
-            'GEMINI_API_KEY ortam değişkeni tanımlı değil. Lütfen Ayarlar > Gizli Anahtarlar panelini kontrol edin.',
+            'GEMINI_API_KEY ortam değişkeni tanımlı değil. Lütfen Settings > Secrets panelinden API anahtarınızı ekleyin.',
         });
       }
 
@@ -641,24 +972,45 @@ async function startServer() {
         { text: string } | { inlineData: { mimeType: string; data: string } }
       > = [];
 
+      let decodedTextAttachment = '';
       if (hasFile && attachmentCheck.cleanBase64 && attachmentCheck.cleanMime) {
-        promptParts.push({
-          inlineData: {
-            mimeType: attachmentCheck.cleanMime,
-            data: attachmentCheck.cleanBase64,
-          },
-        });
+        if (
+          attachmentCheck.cleanMime === 'text/plain' ||
+          attachmentCheck.cleanMime === 'text/csv'
+        ) {
+          decodedTextAttachment = Buffer.from(attachmentCheck.cleanBase64, 'base64')
+            .toString('utf8')
+            .trim();
+        } else if (
+          attachmentCheck.cleanMime === DOCX_MIME ||
+          attachmentCheck.cleanMime === XLSX_MIME
+        ) {
+          decodedTextAttachment = extractTextFromOfficeAttachment(
+            attachmentCheck.cleanBase64,
+            attachmentCheck.cleanMime
+          );
+        } else {
+          promptParts.push({
+            inlineData: {
+              mimeType: attachmentCheck.cleanMime,
+              data: attachmentCheck.cleanBase64,
+            },
+          });
+        }
       }
 
       const instructionPrompt = [
         contextHeader,
         'Aşağıdaki teknik şartnameyi veya alım listesini ürün/kalem bazında incele:',
-        '1) Alıma çıkılan tüm ürünleri/ekipman kalemlerini (varsa miktar ve birim bilgisiyle) ayrı ayrı tespit et.',
-        '2) Her kalem için şartnamede istenen teknik parametreleri (kapasite, güç, voltaj, verimlilik, malzeme, koruma sınıfı, standartlar, sertifikalar vb.) ve teklif aşamasında eleme riski taşıyan kritik teknik kriterleri çıkar.',
-        '3) Her ürün kalemi için, bu teknik özellikleri karşılayan 2 ila 4 gerçek ve piyasada bulunabilir MARKA ve MODEL/SERİ önerisi sun. Varsa katalog/seri/parça numarası ipucunu ekle.',
-        '4) Her öneri için segmentini (örn: "Premium / OEM", "Fiyat-Performans", "Yerli Üretim"), şartname uyum düzeyini ("Tam Uyumlu", "Yüksek Uyum", "Opsiyon/Aksesuar Gerekebilir"), gerekçesini ve teklif öncesi üretici datasheet üzerinden teyit edilmesi gereken noktaları belirt.',
+        '1) Alıma çıkılan ana ürünleri/ekipman kalemlerini (varsa miktar ve birim bilgisiyle) ayrı ayrı tespit et (çok uzun listelerde küçük sarf/aksesuarları mantıklı kalemler altında grupla, toplam en fazla 15 ana kalem çıkar).',
+        '2) Her kalem için şartnamede istenen teknik parametreleri (kapasite, güç, voltaj, verimlilik, malzeme, koruma sınıfı, standartlar, sertifikalar vb.) ve teklif aşamasında eleme riski taşıyan kritik teknik kriterleri özlü biçimde çıkar.',
+        '3) Her ürün kalemi için, bu teknik özellikleri karşılayan 2 ila 3 gerçek ve piyasada bulunabilir MARKA ve MODEL/SERİ önerisi sun. Varsa katalog/seri/parça numarası ipucunu ekle.',
+        '4) Her öneri için segmentini (örn: "Premium / OEM", "Fiyat-Performans", "Yerli Üretim"), şartname uyum düzeyini ("Tam Uyumlu", "Yüksek Uyum", "Opsiyon/Aksesuar Gerekebilir"), gerekçesini (1-2 net cümle) ve datasheet üzerinden teyit edilmesi gereken noktayı (1 kısa cümle) belirt.',
         '5) Genel teknik uyumluluk ve muadil ("veya dengi") sunum tavsiyeleri ver. Uydurma veya belirsiz model kodları verme; emin olduğun gerçek ürün ailelerini ve serilerini öner.',
         trimmedText ? `\n--- TEKNİK ŞARTNAME / ÜRÜN ÖZELLİKLERİ ---\n${trimmedText.slice(0, 60000)}` : '',
+        decodedTextAttachment
+          ? `\n--- DOSYA METNİ ---\n${decodedTextAttachment.slice(0, 60000)}`
+          : '',
       ]
         .filter(Boolean)
         .join('\n\n');
@@ -671,7 +1023,7 @@ async function startServer() {
         config: {
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           systemInstruction:
-            'Sen 4734 sayılı Kamu İhale Kanunu teknik şartnameleri, endüstriyel/bilişim/medikal/altyapı ürün katalogları ve marka-model eşleştirme konusunda uzman bir kıdemli Türk satınalma ve teklif mühendisisin. Yanıtlarını her zaman Türkçe, teknik olarak tutarlı, gerçek üretici serilerine dayalı ve şeffaf ver; datasheet teyidi gereken kritik nüansları mutlaka uyar.',
+            'Sen 4734 sayılı Kamu İhale Kanunu teknik şartnameleri, endüstriyel/bilişim/medikal/altyapı ürün katalogları ve marka-model eşleştirme konusunda uzman bir kıdemli Türk satınalma ve teklif mühendisisin. Yanıtlarını her zaman Türkçe, özlü, teknik olarak tutarlı, gerçek üretici serilerine dayalı ve şeffaf ver; gereksiz tekrar yapma ki JSON çıktısı eksiksiz tamamlansın.',
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -776,8 +1128,42 @@ async function startServer() {
         },
       });
 
-      const parsed = extractGeminiJson(response.text);
-      return res.json(parsed);
+      const finishReason = response.candidates?.[0]?.finishReason;
+      const parsed = extractGeminiJson(response.text, finishReason);
+      const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
+      const rawGeneral = Array.isArray(parsed.generalRecommendations)
+        ? parsed.generalRecommendations
+        : [];
+      return res.json({
+        overview: String(parsed.overview ?? '').trim(),
+        items: rawItems.map((it, idx) => {
+          const item = (it || {}) as Record<string, unknown>;
+          const specs = Array.isArray(item.requiredSpecs) ? item.requiredSpecs : [];
+          const recs = Array.isArray(item.recommendations) ? item.recommendations : [];
+          return {
+            itemNo: String(item.itemNo ?? `Kalem ${idx + 1}`).trim() || `Kalem ${idx + 1}`,
+            productName: String(item.productName ?? '').trim() || `Ürün Kalemi ${idx + 1}`,
+            quantityAndUnit: String(item.quantityAndUnit ?? 'Belirtilmemiş').trim() || 'Belirtilmemiş',
+            requiredSpecs: specs.map((s) => String(s ?? '').trim()).filter(Boolean),
+            complianceRisks: String(item.complianceRisks ?? '').trim(),
+            recommendations: recs.map((r) => {
+              const rec = (r || {}) as Record<string, unknown>;
+              return {
+                brand: String(rec.brand ?? '').trim(),
+                model: String(rec.model ?? '').trim(),
+                partNumberHint: String(rec.partNumberHint ?? '').trim(),
+                segment: String(rec.segment ?? '').trim(),
+                compatibilityLevel: String(rec.compatibilityLevel ?? '').trim(),
+                rationale: String(rec.rationale ?? '').trim(),
+                verificationChecklist: String(rec.verificationChecklist ?? '').trim(),
+              };
+            }),
+          };
+        }),
+        generalRecommendations: rawGeneral
+          .map((g) => String(g ?? '').trim())
+          .filter(Boolean),
+      });
     } catch (err) {
       return handleGeminiRouteError(
         res,
@@ -799,8 +1185,10 @@ async function startServer() {
       const fileBase64 = uploadedFile
         ? uploadedFile.buffer.toString('base64')
         : body.fileBase64;
-      const fileName = uploadedFile ? uploadedFile.originalname : body.fileName;
-      const mimeType = uploadedFile ? uploadedFile.mimetype : body.mimeType;
+      const fileName = decodeUploadFileName(
+        uploadedFile ? uploadedFile.originalname : body.fileName
+      );
+      const mimeType = resolveUploadedMime(uploadedFile, body.mimeType);
       const ownCompanyName = body.ownCompanyName;
       const ownTaxNumber = body.ownTaxNumber;
       const preferredDirection = body.preferredDirection ?? 'auto';
@@ -824,7 +1212,7 @@ async function startServer() {
       if (!apiKey) {
         return res.status(500).json({
           error:
-            'GEMINI_API_KEY ortam değişkeni tanımlı değil. Lütfen Ayarlar > Gizli Anahtarlar panelini kontrol edin.',
+            'GEMINI_API_KEY ortam değişkeni tanımlı değil. Lütfen Settings > Secrets panelinden API anahtarınızı ekleyin.',
         });
       }
 
@@ -843,29 +1231,46 @@ async function startServer() {
         .filter(Boolean)
         .join('\n');
 
+      const invoiceParts: Array<
+        { text: string } | { inlineData: { mimeType: string; data: string } }
+      > = [];
+      let decodedInvoiceText = '';
+      if (
+        attachmentCheck.cleanMime === 'text/plain' ||
+        attachmentCheck.cleanMime === 'text/csv'
+      ) {
+        decodedInvoiceText = Buffer.from(attachmentCheck.cleanBase64, 'base64')
+          .toString('utf8')
+          .trim();
+      } else {
+        invoiceParts.push({
+          inlineData: {
+            mimeType: attachmentCheck.cleanMime,
+            data: attachmentCheck.cleanBase64,
+          },
+        });
+      }
+
       const promptText = [
         ownContextLines,
-        'Yukarıdaki e-Fatura / e-Arşiv / Ticari Fatura PDF/görsel belgesini eksiksiz incele ve şu verileri çıkar:',
+        'Yukarıdaki e-Fatura / e-Arşiv / Ticari Fatura belgesini eksiksiz incele ve şu verileri çıkar:',
         '1) Fatura Yönü: "alis_faturasi" (bize kesilen / tedarikçiden gelen fatura) veya "satis_faturasi" (bizim müşteriye/kuruma kestiğimiz fatura).',
         '2) Karşı Cari Firma Bilgileri (counterparty): Ünvan (name), Vergi Dairesi (taxOffice), VKN/TCKN (taxNumber), varsa Yetkili (contactPerson), Telefon (phone), E-posta (email), Adres (address), IBAN (iban).',
         '3) Fatura Üst Bilgileri: Fatura No (invoiceNo), Düzenleme Tarihi YYYY-MM-DD (invoiceDate), varsa Vade/Son Ödeme Tarihi YYYY-MM-DD yoksa "" (dueDate), Para Birimi sadece TRY/USD/EUR (currency - TL ibaresini TRY olarak ver), Ödeme Yöntemi ipucu (paymentMethodHint: banka_havale, nakit, kredi_karti, cek_senet veya vadeli), kısa fatura notu/ETTN/irsaliye bilgisi (notes).',
         '4) Fatura Genel Toplamları (totals): İskonto düşülmüş KDV hariç Mal/Hizmet Matrahı (subtotalAmount), Hesaplanan KDV Toplamı (vatAmount), Vergiler Dahil Ödenecek Genel Toplam (totalAmount).',
         '5) Fatura Kalemleri / Ürünler (items): Faturadaki TÜM ürün/hizmet satırlarını tek tek listele. Her satırda materialName (ürün/hizmet adı), varsa stockNumber (stok/malzeme kodu), varsa partNumber (parça/OEM/üretici kodu/barkod), quantity (sayı), unit (Adet, Kg, Metre, Set, Hizmet vb.), unitPrice (KDV hariç net birim fiyat), vatRate (KDV oranı sayı, örn: 20, 10, 1, 0), subtotalAmount (satır KDV hariç tutar), vatAmount (satır KDV tutarı), totalAmount (satır KDV dahil tutar) alanlarını hesapla.',
         'Tüm sayısal alanlarda Türkçe binlik ayraçlarını kaldır ve ondalık nokta kullanan gerçek sayı döndür. Emin olmadığın metin alanlarını boş string "" bırak; uydurma veri yazma.',
-      ].join('\n\n');
+        decodedInvoiceText ? `\n--- FATURA METNİ ---\n${decodedInvoiceText.slice(0, 60000)}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+
+      invoiceParts.push({ text: promptText });
 
       const response = await generateGeminiWithRetry(ai, {
         model: 'gemini-4-hydrogen',
         contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType: attachmentCheck.cleanMime,
-                data: attachmentCheck.cleanBase64,
-              },
-            },
-            { text: promptText },
-          ],
+          parts: invoiceParts,
         },
         config: {
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
@@ -982,7 +1387,8 @@ async function startServer() {
         },
       });
 
-      const parsed = extractGeminiJson(response.text);
+      const finishReason = response.candidates?.[0]?.finishReason;
+      const parsed = extractGeminiJson(response.text, finishReason);
 
       const safeIsoDate = (val: unknown, fallback = ''): string => {
         const s = typeof val === 'string' ? val.trim() : '';

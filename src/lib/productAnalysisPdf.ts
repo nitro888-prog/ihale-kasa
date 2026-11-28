@@ -106,10 +106,12 @@ export async function downloadProductAnalysisPdf(params: {
   const content: Content[] = [];
 
   // Kurumsal Üst Başlık Bandı (TINIATECH Logolu Antet)
+  const validLogoDataUrl =
+    logoDataUrl && logoDataUrl.startsWith('data:image/') ? logoDataUrl : null;
   const headerCells: TableCell[] = [];
-  if (logoDataUrl) {
+  if (validLogoDataUrl) {
     headerCells.push({
-      image: logoDataUrl,
+      image: validLogoDataUrl,
       width: 72,
       alignment: 'center',
       fillColor: '#FFFFFF',
@@ -152,12 +154,12 @@ export async function downloadProductAnalysisPdf(params: {
 
   content.push({
     table: {
-      widths: logoDataUrl ? [96, '*'] : ['*'],
+      widths: validLogoDataUrl ? [96, '*'] : ['*'],
       body: [headerCells, accentRow],
     },
     layout: {
       hLineWidth: (i: number) => (i === 0 ? 0.6 : 0),
-      vLineWidth: (i: number) => (logoDataUrl && i === 0 ? 0.6 : 0),
+      vLineWidth: (i: number) => (validLogoDataUrl && i === 0 ? 0.6 : 0),
       hLineColor: () => '#DCE3EC',
       vLineColor: () => '#DCE3EC',
       paddingTop: (i: number) => (i === 1 ? 1.5 : 0),
@@ -225,15 +227,22 @@ export async function downloadProductAnalysisPdf(params: {
     });
   }
 
+  const items = Array.isArray(analysis.items) ? analysis.items : [];
+  const generalRecommendations = Array.isArray(analysis.generalRecommendations)
+    ? analysis.generalRecommendations
+    : [];
+
   // Kalemler & Önerilen Ürünler + Veritabanı Son 5 Fiyat
   content.push({
-    text: `Alıma Çıkılan Ürün Kalemleri ve Marka/Model Önerileri (${analysis.items.length} Kalem)`,
+    text: `Alıma Çıkılan Ürün Kalemleri ve Marka/Model Önerileri (${items.length} Kalem)`,
     style: 'sectionHeading',
     margin: [0, 0, 0, 8],
   });
 
-  analysis.items.forEach((item, idx) => {
-    const itemHeading = `${item.itemNo || `Kalem ${idx + 1}`} — ${item.productName}`;
+  items.forEach((item, idx) => {
+    const specs = Array.isArray(item.requiredSpecs) ? item.requiredSpecs : [];
+    const recs = Array.isArray(item.recommendations) ? item.recommendations : [];
+    const itemHeading = `${item.itemNo || `Kalem ${idx + 1}`} — ${item.productName || `Ürün Kalemi ${idx + 1}`}`;
 
     // Kalem Başlığı Bandı
     content.push({
@@ -272,7 +281,7 @@ export async function downloadProductAnalysisPdf(params: {
     });
 
     // Teknik Özellikler
-    if (item.requiredSpecs.length > 0) {
+    if (specs.length > 0) {
       content.push({
         text: 'Şartnamedeki Kritik Teknik Özellikler',
         fontSize: 9,
@@ -281,7 +290,7 @@ export async function downloadProductAnalysisPdf(params: {
         margin: [0, 2, 0, 3],
       });
       content.push({
-        ul: item.requiredSpecs.map((s) => ({
+        ul: specs.map((s) => ({
           text: s,
           fontSize: 8.5,
           color: '#0B2239',
@@ -321,7 +330,7 @@ export async function downloadProductAnalysisPdf(params: {
     }
 
     // Önerilen Marka / Model Tablosu
-    if (item.recommendations.length > 0) {
+    if (recs.length > 0) {
       const recHeader: TableCell[] = [
         { text: 'Marka & Model', style: 'tableHeader' },
         { text: 'Katalog / Seri', style: 'tableHeader' },
@@ -329,7 +338,7 @@ export async function downloadProductAnalysisPdf(params: {
         { text: 'Teknik Gerekçe & Datasheet Teyidi', style: 'tableHeader' },
       ];
 
-      const recRows: TableCell[][] = item.recommendations.map((rec) => {
+      const recRows: TableCell[][] = recs.map((rec) => {
         const directDb = lookupRecommendationPrices(rec, item, dbProducts);
         const directSummary =
           directDb.lastFivePrices.length > 0
@@ -513,14 +522,14 @@ export async function downloadProductAnalysisPdf(params: {
   });
 
   // Genel Teklif & Muadil Sunum Tavsiyeleri
-  if (analysis.generalRecommendations.length > 0) {
+  if (generalRecommendations.length > 0) {
     content.push({
       text: 'Teklif & Muadil Sunum Tavsiyeleri',
       style: 'sectionHeading',
       margin: [0, 8, 0, 5],
     });
     content.push({
-      ul: analysis.generalRecommendations.map((tip) => ({
+      ul: generalRecommendations.map((tip) => ({
         text: tip,
         fontSize: 8.5,
         color: '#0B2239',

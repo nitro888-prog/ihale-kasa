@@ -9,7 +9,10 @@ export function getTiniatechLogoDataUrl(): Promise<string | null> {
   if (!cachedLogoDataUrlPromise) {
     cachedLogoDataUrlPromise = fetch(LOGO_URL)
       .then((res) => {
-        if (!res.ok) return null;
+        const contentType = res.headers.get('content-type') || '';
+        if (!res.ok || !contentType.toLowerCase().startsWith('image/')) {
+          return null;
+        }
         return res.blob();
       })
       .then(
@@ -21,7 +24,8 @@ export function getTiniatechLogoDataUrl(): Promise<string | null> {
             }
             const reader = new FileReader();
             reader.onloadend = () => {
-              resolve(typeof reader.result === 'string' ? reader.result : null);
+              const resStr = typeof reader.result === 'string' ? reader.result : null;
+              resolve(resStr && resStr.startsWith('data:image/') ? resStr : null);
             };
             reader.onerror = () => resolve(null);
             reader.readAsDataURL(blob);

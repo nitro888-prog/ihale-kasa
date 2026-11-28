@@ -4174,8 +4174,11 @@ export function subscribeTenderAnalyses(
       onData(items);
     },
     (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
-      onError?.(error);
+      try {
+        handleFirestoreError(error, OperationType.LIST, path);
+      } catch (err) {
+        onError?.(err instanceof Error ? err : new Error(String(err)));
+      }
     }
   );
 }
