@@ -176,6 +176,39 @@ function normalizeProductAnalysisResult(raw: unknown): ProductAnalysisResult {
 
 type AnalysisMode = 'summary' | 'products';
 
+function getLocalAnalysesStorageKey(ownerId: string, tenderId: string): string {
+  return `ihalekasa_tender_analyses_${ownerId}_${tenderId}`;
+}
+
+function loadLocalTenderAnalyses(
+  ownerId: string,
+  tenderId: string
+): SavedTenderAnalysis[] {
+  try {
+    const raw = localStorage.getItem(getLocalAnalysesStorageKey(ownerId, tenderId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as SavedTenderAnalysis[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalTenderAnalyses(
+  ownerId: string,
+  tenderId: string,
+  items: SavedTenderAnalysis[]
+): void {
+  try {
+    localStorage.setItem(
+      getLocalAnalysesStorageKey(ownerId, tenderId),
+      JSON.stringify(items.slice(0, 15))
+    );
+  } catch {
+    // Storage quota exceeded - ignore
+  }
+}
+
 interface TenderDetailDrawerProps {
   uid: string;
   workspaceOwnerId: string;
@@ -313,6 +346,8 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
       setDocs([]);
       return;
     }
+    const effectiveOwnerId = tender.ownerId || workspaceOwnerId;
+
     const unsubDocs = subscribeTenderDocuments(
       uid,
       workspaceOwnerId,
@@ -320,17 +355,59 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
       setDocs
     );
 
+    const localCached = loadLocalTenderAnalyses(effectiveOwnerId, tender.id);
+    if (localCached.length > 0) {
+      setSavedAnalyses(localCached);
+      const cachedProducts = localCached.find((a) => a.mode === 'products');
+      const cachedSummary = localCached.find((a) => a.mode === 'summary');
+      if (cachedProducts) {
+        hasHydratedProductRef.current = true;
+        setProductAnalysisResult(normalizeProductAnalysisResult(cachedProducts.result));
+        if (cachedProducts.preferenceNote) {
+          setPreferenceNote((prev) => prev || cachedProducts.preferenceNote || '');
+        }
+        setActiveProductSavedNote('İhale kaydında saklı son ürün analizi');
+      }
+      if (cachedSummary) {
+        hasHydratedSummaryRef.current = true;
+        setAnalysisResult(normalizeDocumentAnalysisResult(cachedSummary.result));
+        setActiveSummarySavedNote('İhale kaydında saklı son özet analizi');
+      }
+      if (!userSelectedTabRef.current && cachedProducts) {
+        const prodTs = cachedProducts.createdAt?.seconds || 0;
+        const sumTs = cachedSummary?.createdAt?.seconds || 0;
+        if (!cachedSummary || prodTs >= sumTs) {
+          setAnalysisMode('products');
+        }
+      }
+    }
+
     setLoadingSavedAnalyses(true);
     const unsubAnalyses = subscribeTenderAnalyses(
-      workspaceOwnerId,
+      effectiveOwnerId,
       tender.id,
       (items) => {
-        setSavedAnalyses(items);
+        const localOnly = loadLocalTenderAnalyses(effectiveOwnerId, tender.id).filter(
+          (l) =>
+            l.id.startsWith('local_') &&
+            !items.some(
+              (f) =>
+                f.mode === l.mode &&
+                Math.abs((f.createdAt?.seconds || 0) - (l.createdAt?.seconds || 0)) < 120
+            )
+        );
+        const mergedItems = [...items, ...localOnly].sort(
+          (a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)
+        );
+        setSavedAnalyses(mergedItems);
+        if (items.length > 0) {
+          saveLocalTenderAnalyses(effectiveOwnerId, tender.id, mergedItems);
+        }
         setLoadingSavedAnalyses(false);
         setSavedAnalysisError(null);
 
-        const latestProducts = items.find((a) => a.mode === 'products');
-        const latestSummary = items.find((a) => a.mode === 'summary');
+        const latestProducts = mergedItems.find((a) => a.mode === 'products');
+        const latestSummary = mergedItems.find((a) => a.mode === 'summary');
 
         if (latestProducts && !hasHydratedProductRef.current) {
           hasHydratedProductRef.current = true;
@@ -705,10 +782,33 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
           ? normalizeProductAnalysisResult(data)
           : normalizeDocumentAnalysisResult(data);
 
+      const effectiveOwnerId = tender.ownerId || workspaceOwnerId;
+      const nowSec = Math.floor(Date.now() / 1000);
+      const localEntry: SavedTenderAnalysis = {
+        id: `local_${Date.now()}`,
+        ownerId: effectiveOwnerId,
+        tenderId: tender.id,
+        mode,
+        result: normalizedForStore as unknown as Record<string, unknown>,
+        preferenceNote: mode === 'products' ? preferenceNote.trim() : '',
+        createdBy: actor.uid,
+        createdByEmail: actor.email,
+        createdByName: actor.displayName,
+        createdAt: { seconds: nowSec, nanoseconds: 0 },
+      };
+
+      const existingLocal = loadLocalTenderAnalyses(effectiveOwnerId, tender.id);
+      const updatedLocal = [localEntry, ...existingLocal];
+      saveLocalTenderAnalyses(effectiveOwnerId, tender.id, updatedLocal);
+      setSavedAnalyses((prev) => {
+        const merged = [localEntry, ...prev];
+        return merged.slice(0, 20);
+      });
+
       if (mode === 'products') {
         hasHydratedProductRef.current = true;
         setProductAnalysisResult(normalizedForStore as ProductAnalysisResult);
-        setActiveProductSavedNote('Ekrana kaydedildi');
+        setActiveProductSavedNote('Ekrana ve ihale kaydına kaydedildi');
         fetchWorkspaceBidProducts(uid, workspaceOwnerId)
           .then((freshProducts) => setFetchedDbProducts(freshProducts))
           .catch(() => {
@@ -717,13 +817,13 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
       } else {
         hasHydratedSummaryRef.current = true;
         setAnalysisResult(normalizedForStore as DocumentAnalysisResult);
-        setActiveSummarySavedNote('Ekrana kaydedildi');
+        setActiveSummarySavedNote('Ekrana ve ihale kaydına kaydedildi');
       }
 
       // Başarılı analiz sonucunu Firestore arşivine kaydet.
       try {
-        await saveTenderAnalysis({
-          workspaceOwnerId,
+        const savedId = await saveTenderAnalysis({
+          workspaceOwnerId: effectiveOwnerId,
           tenderId: tender.id,
           actor,
           mode,
@@ -731,12 +831,16 @@ export const TenderDetailDrawer: React.FC<TenderDetailDrawerProps> = ({
           preferenceNote: mode === 'products' ? preferenceNote : '',
           memberIds,
         });
+        const syncedList = loadLocalTenderAnalyses(effectiveOwnerId, tender.id).map(
+          (item) => (item.id === localEntry.id ? { ...item, id: savedId } : item)
+        );
+        saveLocalTenderAnalyses(effectiveOwnerId, tender.id, syncedList);
         setSavedAnalysisError(null);
       } catch (archiveError) {
         setSavedAnalysisError(
           archiveError instanceof Error
-            ? `Analiz tamamlandı ancak veritabanı arşivine kaydedilemedi: ${archiveError.message}`
-            : 'Analiz tamamlandı ancak veritabanı arşivine kaydedilemedi.'
+            ? `Analiz bu cihaza kaydedildi ancak sunucu arşivine yazılamadı: ${archiveError.message}`
+            : 'Analiz bu cihaza kaydedildi ancak sunucu arşivine yazılamadı.'
         );
       }
     } catch (err) {

@@ -2603,15 +2603,22 @@ export async function updateProject(
 
 export async function reassignProjectManagers(
   projectId: string,
-  managers: ProjectManagerEntry[]
+  managers: ProjectManagerEntry[],
+  memberIds?: string[]
 ): Promise<void> {
   const path = `projects/${projectId}`;
   const managerFields = normalizeProjectManagers(managers);
+  const updatePayload: Record<string, unknown> = {
+    ...managerFields,
+    updatedAt: serverTimestamp(),
+  };
+  if (Array.isArray(memberIds) && memberIds.length > 0) {
+    updatePayload.memberIds = Array.from(
+      new Set([...memberIds, ...managerFields.managerUids].filter(Boolean))
+    ).slice(0, 50);
+  }
   try {
-    await updateDoc(doc(db, 'projects', projectId), {
-      ...managerFields,
-      updatedAt: serverTimestamp(),
-    });
+    await updateDoc(doc(db, 'projects', projectId), updatePayload);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -4212,23 +4219,30 @@ export async function saveTenderAnalysis(params: {
   memberIds?: string[];
 }): Promise<string> {
   const id = makeSafeId('analysis');
-
   const path = `tenders/${params.tenderId}/analyses/${id}`;
+  const cleanResult = JSON.parse(JSON.stringify(params.result || {})) as Record<
+    string,
+    unknown
+  >;
 
-  await setDoc(doc(db, path), {
-    id,
-    ownerId: params.workspaceOwnerId,
-    tenderId: params.tenderId,
-    mode: params.mode,
-    result: params.result,
-    preferenceNote: params.preferenceNote?.trim().slice(0, 2000) || '',
-    memberIds: buildMemberIds(params.workspaceOwnerId, params.memberIds),
-    ...buildCreatorFields(params.actor),
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
+  try {
+    await setDoc(doc(db, path), {
+      id,
+      ownerId: params.workspaceOwnerId,
+      tenderId: params.tenderId,
+      mode: params.mode,
+      result: cleanResult,
+      preferenceNote: params.preferenceNote?.trim().slice(0, 2000) || '',
+      memberIds: buildMemberIds(params.workspaceOwnerId, params.memberIds),
+      ...buildCreatorFields(params.actor),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
 
-  return id;
+    return id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
 }
 
 export function subscribeTenderAnalyses(

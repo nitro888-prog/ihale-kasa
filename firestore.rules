@@ -1439,13 +1439,13 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && preservesCreatorOnUpdate(incoming(), existing())
         && incoming().updatedAt == request.time
-        && (incoming().tenderId == '' || canReadTender(incoming().tenderId))
+        && (incoming().tenderId == '' || incoming().tenderId == existing().tenderId || canReadTender(incoming().tenderId))
         && (
           (
             isWorkspaceAdmin(existing().ownerId)
             && (
               incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])
-              || incoming().diff(existing()).affectedKeys().hasOnly(['managerUid', 'managerEmail', 'managerName', 'managerUids', 'managers', 'updatedAt'])
+              || incoming().diff(existing()).affectedKeys().hasOnly(['managerUid', 'managerEmail', 'managerName', 'managerUids', 'managers', 'memberIds', 'updatedAt'])
             )
           )
           || (

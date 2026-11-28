@@ -34,6 +34,7 @@ import {
   SalesQuote,
   Tender,
   UserAuthorization,
+  ZERO_PERMISSIONS,
 } from '../types/tender';
 import { formatCurrency, formatTurkishDate } from '../lib/trackingAndCalendar';
 
@@ -91,6 +92,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
   const [busyTxId, setBusyTxId] = useState<string | null>(null);
   const [selectedManagerUids, setSelectedManagerUids] = useState<string[]>([]);
   const [reassigning, setReassigning] = useState(false);
+  const [reassignSuccess, setReassignSuccess] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -112,6 +114,10 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
     setConfirmDeleteProject(false);
     setConfirmDeleteTxId(null);
     setErrorMsg(null);
+    setReassignSuccess(null);
+  }, [project?.id]);
+
+  useEffect(() => {
     if (project) {
       setSelectedManagerUids(getProjectManagers(project).map((m) => m.uid));
     } else {
@@ -216,6 +222,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
 
   const toggleManagerUid = (uid: string) => {
     setErrorMsg(null);
+    setReassignSuccess(null);
     setSelectedManagerUids((prev) => {
       if (prev.includes(uid)) {
         return prev.filter((id) => id !== uid);
@@ -230,7 +237,24 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
 
   const handleReassignSubmit = async () => {
     const nextManagers = selectedManagerUids
-      .map((uid) => activeUsers.find((u) => u.uid === uid))
+      .map((uid) => {
+        const active = activeUsers.find((u) => u.uid === uid);
+        if (active) return active;
+        const existingMgr = assignedManagers.find((m) => m.uid === uid);
+        if (!existingMgr) return null;
+        return {
+          uid: existingMgr.uid,
+          email: existingMgr.email,
+          displayName: existingMgr.displayName,
+          department: '',
+          role: 'ihale_sorumlusu',
+          status: 'active',
+          workspaceOwnerId: project.ownerId,
+          inviteId: '',
+          permissions: { ...ZERO_PERMISSIONS, canViewProjects: true },
+          approvedBy: currentUid,
+        } as UserAuthorization;
+      })
       .filter((u): u is UserAuthorization => Boolean(u));
     if (nextManagers.length === 0) {
       setErrorMsg('En az bir aktif proje yöneticisi seçilmelidir.');
@@ -239,12 +263,22 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
     if (!hasManagerChanges) return;
     setReassigning(true);
     setErrorMsg(null);
+    setReassignSuccess(null);
     try {
       await onReassignManagers(project, nextManagers);
-    } catch (err) {
-      setErrorMsg(
-        err instanceof Error ? err.message : 'Proje yöneticileri güncellenemedi.'
+      setReassignSuccess(
+        `${nextManagers.length} proje yöneticisi projeye atandı.`
       );
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Proje yöneticileri güncellenemedi.';
+      if (msg.includes('Missing or insufficient permissions')) {
+        setErrorMsg(
+          'Yönetici atama için Firestore yetkisi reddedildi. Lütfen yönetici oturumunuzu ve kuralları kontrol edin.'
+        );
+      } else {
+        setErrorMsg(msg);
+      }
     } finally {
       setReassigning(false);
     }
@@ -559,9 +593,11 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                       <button
                         type="button"
                         disabled={reassigning}
-                        onClick={() =>
-                          setSelectedManagerUids(assignedManagers.map((m) => m.uid))
-                        }
+                        onClick={() => {
+                          setErrorMsg(null);
+                          setReassignSuccess(null);
+                          setSelectedManagerUids(assignedManagers.map((m) => m.uid));
+                        }}
                         className="min-h-[36px] px-3 bg-white border border-[#DCE3EC] hover:bg-[#F3F6FA] text-[#4E5D6C] text-xs font-medium rounded-lg cursor-pointer"
                       >
                         Sıfırla
@@ -580,10 +616,29 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                       <RefreshCw
                         className={`w-3.5 h-3.5 ${reassigning ? 'animate-spin' : ''}`}
                       />
-                      <span>Yönetici Ata</span>
+                      <span>{reassigning ? 'Atanıyor…' : 'Yönetici Ata'}</span>
                     </button>
                   </div>
                 </div>
+
+                {reassignSuccess && (
+                  <div
+                    role="status"
+                    className="p-2.5 bg-[#007A53]/10 border border-[#007A53]/30 rounded-lg text-xs text-[#007A53] font-medium flex items-center gap-1.5"
+                  >
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>{reassignSuccess}</span>
+                  </div>
+                )}
+
+                {errorMsg && (
+                  <div
+                    role="alert"
+                    className="p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 font-medium"
+                  >
+                    {errorMsg}
+                  </div>
+                )}
               </div>
             )}
           </div>

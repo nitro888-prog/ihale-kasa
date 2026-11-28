@@ -1694,32 +1694,43 @@ export default function App() {
     project: Project,
     nextManagers: UserAuthorization[]
   ) => {
-    if (userAuth.role !== 'admin') return;
+    if (userAuth.role !== 'admin') {
+      throw new Error('Proje yöneticisi atama yetkisi yalnızca sistem yöneticilerine aittir.');
+    }
     if (nextManagers.length === 0) {
       throw new Error('En az bir proje yöneticisi seçilmelidir.');
     }
+    const mergedMembers = Array.from(
+      new Set([
+        ...activeMemberIds,
+        ...(project.memberIds || []),
+        ...nextManagers.map((m) => m.uid),
+      ].filter(Boolean))
+    );
     await reassignProjectManagers(
       project.id,
       nextManagers.map((m) => ({
         uid: m.uid,
         email: m.email,
         displayName: m.displayName || m.email,
-      }))
+      })),
+      mergedMembers
     );
     const adminUids = getActiveAdminUids();
     for (const nextManager of nextManagers) {
-      if (!hasProjectsAccess(nextManager.permissions, nextManager.role)) {
+      const realUser = workspaceUsers.find((u) => u.uid === nextManager.uid);
+      if (realUser && !hasProjectsAccess(realUser.permissions, realUser.role)) {
         await updateUserAuthorization(
           user.uid,
           workspaceOwnerId,
-          nextManager,
+          realUser,
           {
-            displayName: nextManager.displayName,
-            department: nextManager.department,
-            role: nextManager.role,
-            status: nextManager.status,
+            displayName: realUser.displayName,
+            department: realUser.department,
+            role: realUser.role,
+            status: realUser.status,
             permissions: {
-              ...nextManager.permissions,
+              ...realUser.permissions,
               canViewProjects: true,
             },
           },
